@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import email.utils
 import gzip
 import json
 import logging
@@ -28,7 +30,7 @@ WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 ARTICLE_TITLE = "Donald Trump"
 WIKIDATA_ITEM = "Q22686"
 DEFAULT_STATE_FILE = "/var/lib/wiki-death-watch/state.json"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 class RequestError(RuntimeError):
@@ -128,7 +130,7 @@ def detect_death_notice(html: str) -> tuple[bool, list[str], str | None]:
     )
     if lead:
         match = re.search(
-            r"\bDonald\s+John\s+Trump\s*\(([^)]{1,180})\)\s+was\b",
+            r"\bDonald(?:\s+John)?\s+Trump\s*\(([^)]{1,180})\)\s+was\b",
             lead,
             flags=re.IGNORECASE,
         )
@@ -148,7 +150,14 @@ def _retry_after(headers: Any) -> float | None:
     try:
         return max(0.0, float(value))
     except ValueError:
-        return None
+        try:
+            retry_at = email.utils.parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+            delay = retry_at - datetime.datetime.now(datetime.timezone.utc)
+            return max(0.0, delay.total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def request_json(
@@ -184,7 +193,7 @@ def request_json(
             f"{method} {url} returned HTTP {exc.code}",
             retry_after=_retry_after(exc.headers),
         ) from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise RequestError(f"{method} {url} failed: {exc}") from exc
 
     if isinstance(result, dict) and "error" in result:

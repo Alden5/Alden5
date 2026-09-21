@@ -1,3 +1,5 @@
+import datetime
+import email.utils
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +54,30 @@ class DetectionTests(unittest.TestCase):
         detected, _reasons, _lead = watch.detect_death_notice(html)
         self.assertFalse(detected)
 
+    def test_lead_detection_allows_name_without_middle_name(self) -> None:
+        html = """
+        <p>Donald Trump (1946–2026) was an American politician.</p>
+        """
+        detected, reasons, _lead = watch.detect_death_notice(html)
+        self.assertTrue(detected)
+        self.assertEqual(len(reasons), 1)
+
+
+class RequestTests(unittest.TestCase):
+    def test_retry_after_seconds(self) -> None:
+        self.assertEqual(watch._retry_after({"Retry-After": "45"}), 45)
+
+    def test_retry_after_http_date(self) -> None:
+        retry_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=60)
+        value = email.utils.format_datetime(retry_at, usegmt=True)
+        delay = watch._retry_after({"Retry-After": value})
+        self.assertIsNotNone(delay)
+        self.assertGreaterEqual(delay, 58)
+        self.assertLessEqual(delay, 60)
+
+    def test_invalid_retry_after(self) -> None:
+        self.assertIsNone(watch._retry_after({"Retry-After": "not-a-date"}))
+
 
 class StateTransitionTests(unittest.TestCase):
     def make_config(self, path: Path) -> watch.Config:
@@ -94,6 +120,18 @@ class StateTransitionTests(unittest.TestCase):
                 self.assertEqual(publish.call_args.kwargs["title"], "Wikipedia death notice removed")
 
             self.assertEqual(watch.load_state(config.state_file), state)
+
+    def test_unchanged_revision_does_not_download_article(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_config(Path(directory) / "state.json")
+            state = {"revision_id": 50, "alert_active": False}
+            with (
+                patch.object(watch, "latest_revision", return_value=(50, "t50")),
+                patch.object(watch, "rendered_lead") as rendered_lead,
+            ):
+                result = watch.check_once(config, state)
+            self.assertIs(result, state)
+            rendered_lead.assert_not_called()
 
     def test_failed_notification_does_not_advance_state(self) -> None:
         deceased = """
