@@ -1,0 +1,37 @@
+[Unit]
+Description=Wikipedia death notice monitor
+Documentation=https://github.com/Alden5/Alden5
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=wiki-death-watch
+Group=wiki-death-watch
+EnvironmentFile=/etc/wiki-death-watch.env
+ExecStart=/opt/wiki-death-watch/wiki_death_watch.py
+Restart=on-failure
+RestartSec=15s
+StateDirectory=wiki-death-watch
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
