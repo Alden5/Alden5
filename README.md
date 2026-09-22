@@ -11,10 +11,15 @@ vandalized. It links to the exact revision and is not independent confirmation.
 
 - Checks the latest revision ID every 20 seconds.
 - Downloads the rendered lead only when the article changes.
-- Detects a visible `Died` infobox row or a death-date range with past tense.
+- Detects independent visible signals: a `Died` infobox row, a death-date range
+  with past tense, an explicit statement that Trump died, or a `YYYY deaths`
+  category.
 - Checks Wikidata `P570` for context without delaying the initial alert.
 - Sends one alert when the notice appears and another if it is removed.
-- Persists state, deduplicates alerts, and retries temporary failures.
+- Persists an explicit true/false result, timestamps, counters, detection
+  reasons, errors, and Wikidata status.
+- Logs a heartbeat about every five minutes while the article is unchanged.
+- Deduplicates alerts and retries temporary failures.
 - Runs without third-party Python packages.
 
 ## Cost and server recommendation
@@ -168,9 +173,55 @@ systemctl status wiki-death-watch --no-pager
 journalctl -u wiki-death-watch -n 30 --no-pager
 ```
 
-The log should show `Checking Wikipedia revision ...` without repeated errors.
+The log should show `Checking Wikipedia revision ...` followed by an explicit
+`death_notice_detected=false` result, without repeated errors.
 
-### 8. Remove the paid IPv4
+### 8. Confirm it is checking and currently false
+
+Run:
+
+```bash
+sudo /opt/wiki-death-watch/wiki_death_watch.py --status
+```
+
+A normal result while the article describes a living person looks like:
+
+```text
+Monitor health:            HEALTHY
+Death notice detected:     false
+Last successful check:     2026-09-22 04:00:20 UTC (8s ago)
+Last content evaluation:   2026-09-22 03:55:00 UTC
+Latest revision checked:   1234567890
+Wikidata death date P570:  not set
+Detection signals:         0
+  - none; the monitored page still appears to describe a living person
+Counters:                  17 successful checks, 1 content evaluations, 0 errors, 0 notifications
+```
+
+`Last successful check` should advance every 20 seconds. `Last content
+evaluation` advances only when Wikipedia publishes a new revision; it is
+normal for that value to be older. As long as health is `HEALTHY`, the latest
+revision is unchanged and `Death notice detected` is `false`, the service is
+actively checking and has found no death notice.
+
+Watch the status update live:
+
+```bash
+sudo watch -n 5 /opt/wiki-death-watch/wiki_death_watch.py --status
+```
+
+View only check results and five-minute heartbeats:
+
+```bash
+sudo journalctl -u wiki-death-watch --since "30 minutes ago" \
+  | grep -E 'Evaluation result|Heartbeat'
+```
+
+Status exits with code `0` when healthy, `2` when stale, and `1` if no state
+exists yet. Persistent state is stored at
+`/var/lib/wiki-death-watch/state.json`.
+
+### 9. Remove the paid IPv4
 
 Only do this after the test notification succeeds:
 
@@ -181,7 +232,8 @@ Only do this after the test notification succeeds:
 4. Keep the public IPv6.
 5. Remove the temporary port 22 rule from the security group, leaving inbound
    default **Drop**.
-6. Verify after about 30 seconds that new service logs still appear.
+6. Wait about 30 seconds and rerun `--status`. It should remain `HEALTHY` and
+   show a newer successful-check time.
 
 After deleting IPv4, direct `git pull` from GitHub will not work and SSH works
 only if your own internet connection has IPv6. Scaleway's web console remains
@@ -190,23 +242,110 @@ perform the update, then detach **and delete** that IPv4 again.
 
 ## Maintenance
 
-View health and logs:
+### Check health and recent activity
 
 ```bash
+sudo /opt/wiki-death-watch/wiki_death_watch.py --status
 systemctl status wiki-death-watch --no-pager
-sudo journalctl -u wiki-death-watch -f
+sudo journalctl -u wiki-death-watch -n 50 --no-pager
 ```
 
-Update from a fresh repository checkout or after temporarily restoring IPv4:
+If status is `STALE`, inspect the logs and restart:
 
 ```bash
-cd ~/Alden5
-git pull --ff-only
-sudo ./install.sh
+sudo journalctl -u wiki-death-watch -n 100 --no-pager
+sudo systemctl restart wiki-death-watch
+sleep 25
+sudo /opt/wiki-death-watch/wiki_death_watch.py --status
 ```
 
-The installer preserves `/etc/wiki-death-watch.env` during updates, so the
-contact address is required only on the first installation.
+### Update to a newer version
+
+The installed copy does not update itself. Use this procedure whenever this
+repository changes:
+
+1. In Scaleway, temporarily reserve and attach a flexible IPv4 if the instance
+   is currently IPv6-only.
+2. Temporarily restore the security-group TCP port 22 rule for your own public
+   IP `/32`.
+3. SSH to the server's temporary IPv4:
+
+   ```bash
+   ssh -i ~/.ssh/scaleway-wiki-monitor root@SERVER_IPV4
+   ```
+
+4. Check that the source checkout has no local changes, download `main`, and
+   review the commits that will be installed:
+
+   ```bash
+   cd /root/Alden5
+   git status --short
+   git fetch origin main
+   git log --oneline HEAD..origin/main
+   ```
+
+   Stop if `git status` prints unexpected files or edits. Do not discard them
+   without understanding why they exist.
+
+5. Fast-forward the checkout and reinstall:
+
+   ```bash
+   git pull --ff-only origin main
+   sudo ./install.sh
+   ```
+
+   The installer preserves `/etc/wiki-death-watch.env`, including the topic
+   subscribed on the iPhone.
+
+6. Verify the updated files, service, live check, and notification path:
+
+   ```bash
+   python3 -m unittest -v
+   systemctl status wiki-death-watch --no-pager
+   sleep 25
+   sudo /opt/wiki-death-watch/wiki_death_watch.py --status
+   sudo sh -c 'set -a; . /etc/wiki-death-watch.env; exec \
+     /opt/wiki-death-watch/wiki_death_watch.py --test-notification'
+   ```
+
+7. Confirm the iPhone receives the test.
+8. Detach **and delete** the temporary flexible IPv4 reservation.
+9. Remove the temporary inbound port 22 rule.
+10. Wait 30 seconds and confirm `--status` remains `HEALTHY`.
+
+If the GitHub repository is private, the server also needs read access before
+`git fetch` works. Add a read-only GitHub deploy key:
+
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/github-wiki-monitor -N ""
+cat /root/.ssh/github-wiki-monitor.pub
+```
+
+In GitHub, open **Repository Settings → Deploy keys → Add deploy key**, paste
+that public key, and leave **Allow write access** unchecked. Then configure the
+checkout:
+
+```bash
+cat >/root/.ssh/config <<'EOF'
+Host github.com
+  IdentityFile /root/.ssh/github-wiki-monitor
+  IdentitiesOnly yes
+EOF
+chmod 600 /root/.ssh/config
+ssh-keyscan github.com >>/root/.ssh/known_hosts
+ssh-keygen -lf /root/.ssh/known_hosts
+cd /root/Alden5
+git remote set-url origin git@github.com:Alden5/Alden5.git
+git fetch origin main
+```
+
+Before accepting the first SSH connection, compare the displayed host-key
+fingerprint with
+[GitHub's published SSH fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+GitHub access still requires the temporary IPv4 because `github.com` does not
+provide the needed IPv6 connectivity.
+
+### Change configuration
 
 Edit configuration:
 

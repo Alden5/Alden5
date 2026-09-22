@@ -116,3 +116,6 @@ echo "    /opt/wiki-death-watch/wiki_death_watch.py --test-notification'"
 echo
 echo "View service logs with:"
 echo "  journalctl -u wiki-death-watch -f"
+echo
+echo "Show the latest result and monitoring counters with:"
+echo "  sudo /opt/wiki-death-watch/wiki_death_watch.py --status"
