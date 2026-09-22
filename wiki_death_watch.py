@@ -30,7 +30,8 @@ WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 ARTICLE_TITLE = "Donald Trump"
 WIKIDATA_ITEM = "Q22686"
 DEFAULT_STATE_FILE = "/var/lib/wiki-death-watch/state.json"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+HEARTBEAT_EVERY_CHECKS = 15
 
 
 class RequestError(RuntimeError):
@@ -116,7 +117,10 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def detect_death_notice(html: str) -> tuple[bool, list[str], str | None]:
+def detect_death_notice(
+    html: str,
+    categories: list[str] | None = None,
+) -> tuple[bool, list[str], str | None]:
     parser = LeadHTMLParser()
     parser.feed(html)
     reasons: list[str] = []
@@ -136,9 +140,28 @@ def detect_death_notice(html: str) -> tuple[bool, list[str], str | None]:
         )
         if match:
             dates = match.group(1).strip()
-            has_range = bool(re.search(r"\d{4}\s*[–—-]\s*(?:\w+\s+\d{1,2},\s+)?\d{4}", dates))
+            has_range = bool(
+                re.search(r"\b(?:19|20)\d{2}\b.{0,80}[–—-].{0,80}\b(?:19|20)\d{2}\b", dates)
+            )
             if has_range and not dates.casefold().startswith("born "):
                 reasons.append(f'lead uses a death-date range and past tense: "{dates}"')
+
+        explicit_death = re.search(
+            r"\b(?:Donald(?:\s+John)?\s+Trump|Trump|he)\s+"
+            r"(?:has\s+)?(?:died|passed\s+away)\b",
+            lead,
+            flags=re.IGNORECASE,
+        )
+        if explicit_death:
+            reasons.append(f'lead explicitly says "{explicit_death.group(0)}"')
+
+    death_categories = [
+        category
+        for category in categories or []
+        if re.fullmatch(r"Category:(?:19|20)\d{2} deaths", category)
+    ]
+    if death_categories:
+        reasons.append(f"article is in {', '.join(death_categories)}")
 
     return bool(reasons), reasons, lead
 
@@ -248,6 +271,26 @@ def rendered_lead(config: Config, revision_id: int) -> str:
         raise RequestError(f"Wikipedia returned no rendered lead for revision {revision_id}") from exc
 
 
+def article_categories(config: Config, revision_id: int) -> list[str]:
+    result = wikipedia_query(
+        config,
+        {
+            "action": "parse",
+            "oldid": str(revision_id),
+            "prop": "categories",
+        },
+    )
+    try:
+        categories = result["parse"].get("categories", [])
+        return [
+            f"Category:{str(category['category']).replace('_', ' ')}"
+            for category in categories
+            if "category" in category
+        ]
+    except (KeyError, TypeError) as exc:
+        raise RequestError("Wikipedia returned no usable category list") from exc
+
+
 def wikidata_death_date(config: Config) -> str | None:
     params = {
         "action": "wbgetentities",
@@ -326,6 +369,80 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def state_count(state: dict[str, Any], key: str) -> int:
+    value = state.get(key, 0)
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def format_time(epoch: Any) -> str:
+    if not isinstance(epoch, (int, float)):
+        return "never"
+    timestamp = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def format_age(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60}s ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m ago"
+    return f"{seconds // 86400}d {(seconds % 86400) // 3600}h ago"
+
+
+def print_status(path: Path) -> int:
+    state = load_state(path)
+    if not state:
+        print(f"No monitor state found at {path}.")
+        print("The service may not have completed its first check yet.")
+        return 1
+
+    now = time.time()
+    last_check = state.get("last_successful_check_at", state.get("checked_at"))
+    poll_seconds = state.get("poll_seconds", 20)
+    if not isinstance(poll_seconds, (int, float)) or poll_seconds <= 0:
+        poll_seconds = 20
+    age = now - last_check if isinstance(last_check, (int, float)) else float("inf")
+    health = "HEALTHY" if age <= max(90, poll_seconds * 3) else "STALE"
+    detected = bool(state.get("death_notice_detected", state.get("alert_active", False)))
+    reasons = state.get("detection_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+
+    print(f"Monitor health:            {health}")
+    print(f"Death notice detected:     {str(detected).lower()}")
+    print(
+        f"Last successful check:     {format_time(last_check)}"
+        + (f" ({format_age(age)})" if age != float("inf") else "")
+    )
+    print(f"Last content evaluation:   {format_time(state.get('last_evaluation_at'))}")
+    print(f"Latest revision checked:   {state.get('revision_id', 'unknown')}")
+    print(f"Revision timestamp:        {state.get('revision_timestamp', 'unknown')}")
+    if state.get("wikidata_check_succeeded", True):
+        wikidata_status = state.get("wikidata_death_date") or "not set"
+    else:
+        wikidata_status = "last check failed"
+    print(f"Wikidata death date P570:  {wikidata_status}")
+    print(f"Detection signals:         {len(reasons)}")
+    for reason in reasons:
+        print(f"  - {reason}")
+    if not reasons:
+        print("  - none; the monitored page still appears to describe a living person")
+    print(
+        "Counters:                  "
+        f"{state_count(state, 'checks_total')} successful checks, "
+        f"{state_count(state, 'revision_changes_total')} content evaluations, "
+        f"{state_count(state, 'errors_total')} errors, "
+        f"{state_count(state, 'notifications_total')} notifications"
+    )
+    if state.get("last_error"):
+        print(f"Last error:                {state['last_error']}")
+        print(f"Last error time:           {format_time(state.get('last_error_at'))}")
+    return 0 if health == "HEALTHY" else 2
+
+
 def revision_url(revision_id: int) -> str:
     return f"https://en.wikipedia.org/w/index.php?title=Donald_Trump&oldid={revision_id}"
 
@@ -339,27 +456,64 @@ def diff_url(previous_revision: int | None, revision_id: int) -> str:
 def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
     revision_id, timestamp = latest_revision(config)
     previous_revision = state.get("revision_id")
+    checks_total = state_count(state, "checks_total") + 1
     if previous_revision == revision_id:
-        return state
+        now = int(time.time())
+        new_state = dict(state)
+        new_state.update(
+            {
+                "last_successful_check_at": now,
+                "checked_at": now,
+                "checks_total": checks_total,
+                "consecutive_errors": 0,
+                "poll_seconds": config.poll_seconds,
+            }
+        )
+        save_state(config.state_file, new_state)
+        if checks_total % HEARTBEAT_EVERY_CHECKS == 0:
+            detected = bool(
+                new_state.get("death_notice_detected", new_state.get("alert_active", False))
+            )
+            LOG.info(
+                "Heartbeat: %s successful checks; revision %s unchanged; "
+                "death_notice_detected=%s",
+                checks_total,
+                revision_id,
+                str(detected).lower(),
+            )
+        return new_state
 
     LOG.info("Checking Wikipedia revision %s (%s)", revision_id, timestamp)
     html = rendered_lead(config, revision_id)
-    detected, reasons, _lead = detect_death_notice(html)
+    categories: list[str] = []
+    categories_check_succeeded = True
+    try:
+        categories = article_categories(config, revision_id)
+    except RequestError as exc:
+        categories_check_succeeded = False
+        LOG.warning("Could not check article categories: %s", exc)
+
+    corroboration = None
+    wikidata_check_succeeded = True
+    try:
+        corroboration = wikidata_death_date(config)
+    except RequestError as exc:
+        wikidata_check_succeeded = False
+        LOG.warning("Could not check Wikidata corroboration: %s", exc)
+
+    detected, reasons, lead = detect_death_notice(html, categories)
     alert_active = bool(state.get("alert_active", False))
     link = diff_url(previous_revision if isinstance(previous_revision, int) else None, revision_id)
+    notifications_total = state_count(state, "notifications_total")
 
     if detected and not alert_active:
-        corroboration = None
-        try:
-            corroboration = wikidata_death_date(config)
-        except RequestError as exc:
-            LOG.warning("Could not check Wikidata corroboration: %s", exc)
-
         details = "; ".join(reasons)
         if corroboration:
             details += f". Wikidata P570 is {corroboration}"
-        else:
+        elif wikidata_check_succeeded:
             details += ". Wikidata did not corroborate this when checked"
+        else:
+            details += ". The Wikidata corroboration check failed"
         publish_ntfy(
             config,
             title="Possible Wikipedia death update",
@@ -373,6 +527,7 @@ def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
         )
         LOG.warning("Sent death-update notification for revision %s", revision_id)
         alert_active = True
+        notifications_total += 1
     elif not detected and alert_active:
         publish_ntfy(
             config,
@@ -387,24 +542,71 @@ def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
         )
         LOG.info("Sent removal notification for revision %s", revision_id)
         alert_active = False
+        notifications_total += 1
 
+    now = int(time.time())
     new_state = {
         "revision_id": revision_id,
         "revision_timestamp": timestamp,
         "alert_active": alert_active,
-        "checked_at": int(time.time()),
+        "death_notice_detected": detected,
+        "detection_reasons": reasons,
+        "lead_excerpt": (lead or "")[:500],
+        "wikidata_death_date": corroboration,
+        "wikidata_check_succeeded": wikidata_check_succeeded,
+        "categories_check_succeeded": categories_check_succeeded,
+        "living_people_category_present": "Category:Living people" in categories,
+        "last_successful_check_at": now,
+        "last_evaluation_at": now,
+        "checked_at": now,
+        "checks_total": checks_total,
+        "revision_changes_total": state_count(state, "revision_changes_total") + 1,
+        "errors_total": state_count(state, "errors_total"),
+        "consecutive_errors": 0,
+        "notifications_total": notifications_total,
+        "poll_seconds": config.poll_seconds,
     }
+    save_state(config.state_file, new_state)
+    LOG.info(
+        "Evaluation result for revision %s: death_notice_detected=%s; "
+        "signals=%s; wikidata_P570=%s",
+        revision_id,
+        str(detected).lower(),
+        len(reasons),
+        corroboration or "not-set",
+    )
+    return new_state
+
+
+def record_error(config: Config, state: dict[str, Any], error: RequestError) -> dict[str, Any]:
+    now = int(time.time())
+    new_state = dict(state)
+    new_state.update(
+        {
+            "errors_total": state_count(state, "errors_total") + 1,
+            "consecutive_errors": state_count(state, "consecutive_errors") + 1,
+            "last_error": str(error),
+            "last_error_at": now,
+            "poll_seconds": config.poll_seconds,
+        }
+    )
     save_state(config.state_file, new_state)
     return new_state
 
 
-def parse_config() -> tuple[Config, argparse.Namespace]:
+def parse_config() -> tuple[Config | None, argparse.Namespace]:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--once", action="store_true", help="check once, then exit")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="check once, then exit")
+    mode.add_argument(
         "--test-notification",
         action="store_true",
         help="send a test ntfy message, then exit",
+    )
+    mode.add_argument(
+        "--status",
+        action="store_true",
+        help="show persisted health, result, and counters, then exit",
     )
     parser.add_argument(
         "--state-file",
@@ -412,6 +614,9 @@ def parse_config() -> tuple[Config, argparse.Namespace]:
         help=f"persistent state path (default: {DEFAULT_STATE_FILE})",
     )
     args = parser.parse_args()
+
+    if args.status:
+        return None, args
 
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     contact = os.environ.get("WIKIMEDIA_CONTACT", "").strip()
@@ -451,6 +656,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     config, args = parse_config()
+    if args.status:
+        return print_status(Path(args.state_file))
+    if config is None:
+        raise RuntimeError("monitor configuration was not loaded")
 
     if len(config.ntfy_topic) < 24 and not config.ntfy_token:
         LOG.warning("Use a random topic of at least 24 characters; public ntfy topic names act as passwords")
@@ -489,6 +698,7 @@ def main() -> int:
             if args.once:
                 LOG.error("%s", exc)
                 return 1
+            state = record_error(config, state, exc)
             sleep_for = exc.retry_after if exc.retry_after is not None else backoff
             sleep_for = max(config.poll_seconds, min(sleep_for, 600.0))
             backoff = min(max(backoff * 2, config.poll_seconds), 600.0)
