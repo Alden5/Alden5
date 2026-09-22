@@ -453,9 +453,9 @@ def diff_url(previous_revision: int | None, revision_id: int) -> str:
 def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
     revision_id, timestamp = latest_revision(config)
     previous_revision = state.get("revision_id")
-    now = int(time.time())
     checks_total = state_count(state, "checks_total") + 1
     if previous_revision == revision_id:
+        now = int(time.time())
         new_state = dict(state)
         new_state.update(
             {
@@ -541,6 +541,7 @@ def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
         alert_active = False
         notifications_total += 1
 
+    now = int(time.time())
     new_state = {
         "revision_id": revision_id,
         "revision_timestamp": timestamp,

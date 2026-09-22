@@ -148,7 +148,8 @@ class StateTransitionTests(unittest.TestCase):
                 patch.object(watch, "rendered_lead") as rendered_lead,
             ):
                 result = watch.check_once(config, state)
-            self.assertIs(result, state)
+            self.assertEqual(result["revision_id"], state["revision_id"])
+            self.assertEqual(result["checks_total"], 1)
             rendered_lead.assert_not_called()
 
     def test_failed_notification_does_not_advance_state(self) -> None:
