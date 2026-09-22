@@ -271,20 +271,23 @@ def rendered_lead(config: Config, revision_id: int) -> str:
         raise RequestError(f"Wikipedia returned no rendered lead for revision {revision_id}") from exc
 
 
-def article_categories(config: Config) -> list[str]:
+def article_categories(config: Config, revision_id: int) -> list[str]:
     result = wikipedia_query(
         config,
         {
-            "action": "query",
+            "action": "parse",
+            "oldid": str(revision_id),
             "prop": "categories",
-            "titles": ARTICLE_TITLE,
-            "cllimit": "max",
         },
     )
     try:
-        categories = result["query"]["pages"][0].get("categories", [])
-        return [str(category["title"]) for category in categories if "title" in category]
-    except (KeyError, IndexError, TypeError) as exc:
+        categories = result["parse"].get("categories", [])
+        return [
+            f"Category:{str(category['category']).replace('_', ' ')}"
+            for category in categories
+            if "category" in category
+        ]
+    except (KeyError, TypeError) as exc:
         raise RequestError("Wikipedia returned no usable category list") from exc
 
 
@@ -485,7 +488,7 @@ def check_once(config: Config, state: dict[str, Any]) -> dict[str, Any]:
     categories: list[str] = []
     categories_check_succeeded = True
     try:
-        categories = article_categories(config)
+        categories = article_categories(config, revision_id)
     except RequestError as exc:
         categories_check_succeeded = False
         LOG.warning("Could not check article categories: %s", exc)
