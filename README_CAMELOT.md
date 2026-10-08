@@ -38,7 +38,7 @@ Your browser opens at `http://localhost:8765`.
 3. Under **Suggested removals**, press **Remove** on any song you want to leave out,
    or **Remove all suggested**. Removed songs can be restored.
 4. Optionally choose **Start with** to fix the opening song, or change **Flow**:
-   - *Build energy* prefers stepping up the wheel (8A → 9A → 10A).
+   - *Build energy* prefers rising tempo and stepping up the wheel (8A → 9A → 10A).
    - *Smoothest overall* minimizes clashes in either direction.
 5. Press **Create sorted playlist**. Running it again replaces the earlier
    sorted copy. If you already have your own playlist with that name, the new one
@@ -83,14 +83,30 @@ Each pair of songs gets a mixing cost based on Camelot rules:
 | Same key | 8A → 8A | 0 |
 | Relative major/minor | 8A ↔ 8B | 0.2 |
 | One step around the wheel | 8A → 9A / 7A | 0.5 |
-| Diagonal step | 8A → 9B | 1.4 |
-| Two steps (energy boost) | 8A → 10A | 2.5 |
+| Diagonal mood shift | 8A → 9B, 8B → 7A | 1.0 |
+| Other diagonal | 8A → 7B, 8B → 9A | 1.8 |
+| Energy boost / drop | 8A → 10A / 8A → 6A | 2.0 / 2.3 |
+| Semitone lift (cut, don't blend) | 8A → 3A | 3.0 |
 | Three or more steps | 8A → 11A … 2A | 4.5 – 8.5 |
 
 If BPM is set in Music, tempo jumps of more than about 6% add to the cost. Half
-and double time (87 ↔ 174) count as compatible. The app searches for the order
-with the lowest total cost, using nearest-neighbour seeding followed by 2-opt and
-Or-opt local search.
+and double time (87 ↔ 174) count as compatible. Any transition costing more than
+2.5 is a **clash**.
+
+The app looks for the best order in this priority:
+
+1. **Fewest clashes.** Each clash carries a large penalty, so the app will take
+   two smooth steps (8A → 10A → 12A) over one jump (8A → 12A).
+2. **Least total friction** across all transitions.
+3. **Variety.** The same artist doesn't play twice in a row, including
+   features (e.g. "Meduza" and "Meduza, Becky Hill & Goodboys"), and duplicate
+   copies of a song are never placed next to each other.
+4. With **Build energy**, tempo rises through the set and keys step up the wheel.
+
+Playlists of up to 13 songs are solved exactly. Larger ones use iterated local
+search: 2-opt and Or-opt moves, restarted from random shuffles. This takes
+about 1 second for 150 songs and is capped at 2.5 seconds. The same playlist
+always gives the same order.
 
 A song is **suggested for removal** in either of these cases:
 

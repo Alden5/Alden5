@@ -214,49 +214,37 @@ def camelot_distance(k1: MusicalKey, k2: MusicalKey) -> int:
 
 def transition_score(k1: MusicalKey, k2: MusicalKey) -> Tuple[float, str]:
     """
-    Score the musical compatibility between two keys.
-    Returns (penalty, description). Lower penalty = smoother transition.
+    Mixing penalty from k1 into k2 (lower is smoother) and a description.
 
-    Camelot DJ Rules:
-    - Same Key (e.g. 8A -> 8A): 0 penalty ("Exact Key Match")
-    - Relative Major/Minor (e.g. 8A <-> 8B): 0.2 penalty ("Relative Major/Minor")
-    - Adjacent step on wheel, same mode (e.g. 8A -> 9A or 8A -> 7A): 0.5 penalty ("Harmonic Step +1 / -1")
-    - Diagonal step (e.g. 8A -> 9B or 8A -> 7B): 1.5 penalty ("Diagonal Step")
-    - Energy Boost / Half-Step (+7 semitones / +1 on Camelot or pitch shifts):
-      - 2 steps on wheel (e.g. 8A -> 10A): 2.5 penalty ("Energy Boost / Two Steps")
-    - 3-5 steps on wheel: 4.0 - 7.0 penalty
-    - Opposite wheel (6 steps, e.g. 8A -> 2A): 8.0 penalty ("Tritone / Opposite Key")
+    Anything above 2.5 is treated as a clash: the keys sound dissonant while
+    both tracks play, so the mix needs a quick cut rather than a blend.
     """
     if k1 == k2:
-        return 0.0, "Exact key match"
+        return 0.0, "Same key"
 
     wheel_dist = camelot_distance(k1, k2)
-    same_mode = (k1.letter == k2.letter)
+    same_mode = k1.letter == k2.letter
+    step = (k2.number - k1.number) % 12  # clockwise steps, 0-11
 
-    if wheel_dist == 0 and not same_mode:
+    if wheel_dist == 0:
         return 0.2, "Relative major/minor"
 
     if wheel_dist == 1:
         if same_mode:
-            step_dir = "+1" if (k2.number - k1.number) % 12 == 1 else "-1"
-            return 0.5, f"Harmonic step ({step_dir})"
-        else:
-            return 1.4, "Diagonal harmonic step"
+            return 0.5, f"Harmonic step ({'+1' if step == 1 else '-1'})"
+        # Minor +1 to major (8A -> 9B) and major -1 to minor (8B -> 7A) keep the
+        # shared notes and lift/lower the mood naturally; the other diagonal is weaker.
+        if (k1.letter == 'A' and step == 1) or (k1.letter == 'B' and step == 11):
+            return 1.0, "Diagonal mood shift"
+        return 1.8, "Diagonal step"
 
     if wheel_dist == 2:
         if same_mode:
-            return 2.5, "Two-step energy jump"
-        else:
-            return 3.2, "Two-step mode shift"
+            return (2.0, "Energy boost (+2)") if step == 2 else (2.3, "Energy drop (-2)")
+        return 3.2, "Two-step mode shift"
 
-    if wheel_dist == 3:
-        return 4.5, "Three-step shift"
+    if same_mode and step == 7:
+        return 3.0, "Semitone lift (cut, don't blend)"
 
-    if wheel_dist == 4:
-        return 6.0, "Four-step shift"
-
-    if wheel_dist == 5:
-        return 7.0, "Five-step shift"
-
-    # wheel_dist == 6
-    return 8.5, "Opposite wheel clash"
+    return {3: 4.5, 4: 6.0, 5: 7.0, 6: 8.5}[wheel_dist], (
+        "Opposite side of the wheel" if wheel_dist == 6 else f"{wheel_dist}-step key jump")

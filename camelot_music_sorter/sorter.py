@@ -1,20 +1,31 @@
 """
 Harmonic playlist ordering and removal suggestions based on Camelot DJ rules.
 
-Ordering is an open-path travelling-salesperson problem over transition costs,
-solved with multi-start nearest neighbour followed by 2-opt and Or-opt local
-search. Costs may be asymmetric (the energy-build preference rewards moving
-up the wheel), so segment reversals account for the reversed internal edges.
+Ordering is an open-path, asymmetric travelling-salesperson problem solved by
+`optimizer.solve`. The objective is lexicographic in practice: every clash
+(a transition above SMOOTH_THRESHOLD) carries a large fixed penalty, so the
+solver first minimizes the number of clashes, then total key/tempo friction,
+then soft preferences (no back-to-back artists, rising tempo when building
+energy).
 """
 
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .camelot import camelot_distance, transition_score
+import numpy as np
+
+from .camelot import MusicalKey, transition_score
+from .optimizer import solve
 from .song_model import Song
 
 SMOOTH_THRESHOLD = 2.5
+CLASH_WEIGHT = 10.0
+SAME_ARTIST_PENALTY = 0.6
+DUPLICATE_PENALTY = 25.0
+BUILD_STEP_BONUS = 0.15
+TEMPO_DROP_PENALTY = 0.1
 
 
 @dataclass
@@ -94,131 +105,77 @@ def evaluate_playlist_order(songs: List[Song]) -> Tuple[float, List[TransitionIn
     return total, transitions
 
 
+def _key_index(k: MusicalKey) -> int:
+    return (k.number - 1) * 2 + (0 if k.letter == "A" else 1)
+
+
+_KEYS = [MusicalKey.from_camelot(f"{n}{l}") for n in range(1, 13) for l in "AB"]
+_KEY_COST = np.array([[transition_score(a, b)[0] for b in _KEYS] for a in _KEYS])
+_ARTIST_SPLIT = re.compile(r"\s*(?:,|&|\+|/|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\bx\b|\bvs\.?|\band\b)\s*")
+
+
+def artist_names(artist: str) -> frozenset:
+    return frozenset(p for p in (x.strip() for x in _ARTIST_SPLIT.split((artist or "").lower())) if p)
+
+
+def musical_cost_matrix(songs: List[Song]) -> np.ndarray:
+    """Vectorized calculate_pairwise_cost for every ordered pair of songs with known keys."""
+    k = np.array([_key_index(s.resolved_key) for s in songs])
+    cost = _KEY_COST[k[:, None], k[None, :]].copy()
+    bpm = np.array([s.bpm for s in songs], dtype=float)
+    a, b = bpm[:, None], bpm[None, :]
+    known = (a > 0) & (b > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct = np.minimum.reduce([np.abs(b - a), np.abs(b - 2 * a), np.abs(b - 0.5 * a)]) / a
+    cost += np.where(known & (pct > 0.06), np.minimum(4.0, (pct - 0.06) * 25), 0.0)
+    np.fill_diagonal(cost, 0.0)
+    return cost
+
+
 class HarmonicPlaylistSorter:
-    def __init__(self, energy_flow_preference: str = "gradual_build", max_passes: int = 50):
+    def __init__(self, energy_flow_preference: str = "gradual_build", time_limit: float = 2.5):
         """
         energy_flow_preference:
-        - 'gradual_build': slightly prefers moving up the wheel (7A -> 8A -> 9A) for rising energy
-        - 'balanced': minimizes friction in either direction
+        - 'gradual_build': prefers stepping up the wheel (7A -> 8A -> 9A) and rising tempo
+        - 'balanced': smoothest mixing in either direction
         """
         self.energy_flow_preference = energy_flow_preference
-        self.max_passes = max_passes
+        self.time_limit = time_limit
 
-    def _cost_matrix(self, songs: List[Song]) -> List[List[float]]:
+    def objective_matrix(self, songs: List[Song]) -> np.ndarray:
+        musical = musical_cost_matrix(songs)
+        obj = musical + CLASH_WEIGHT * (musical > SMOOTH_THRESHOLD)
+
+        names = [artist_names(s.artist) for s in songs]
+        pids = [s.persistent_id for s in songs]
         n = len(songs)
-        costs = [[0.0] * n for _ in range(n)]
         for i in range(n):
             for j in range(n):
                 if i == j:
                     continue
-                c, _ = calculate_pairwise_cost(songs[i], songs[j])
-                if self.energy_flow_preference == "gradual_build":
-                    k1, k2 = songs[i].resolved_key, songs[j].resolved_key
-                    if (k2.number - k1.number) % 12 == 1:
-                        c -= 0.1
-                costs[i][j] = c
-        return costs
+                if pids[i] == pids[j]:
+                    obj[i, j] += DUPLICATE_PENALTY
+                elif names[i] & names[j]:
+                    obj[i, j] += SAME_ARTIST_PENALTY
 
-    @staticmethod
-    def _route_cost(route: List[int], costs: List[List[float]]) -> float:
-        return sum(costs[a][b] for a, b in zip(route, route[1:]))
+        if self.energy_flow_preference == "gradual_build":
+            num = np.array([s.resolved_key.number for s in songs])
+            obj -= BUILD_STEP_BONUS * (((num[None, :] - num[:, None]) % 12) == 1)
+            bpm = np.array([s.bpm for s in songs], dtype=float)
+            a, b = bpm[:, None], bpm[None, :]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                drop = (a > 0) & (b > 0) & (b < 0.995 * a) & (np.abs(b - 0.5 * a) > 0.03 * a)
+                obj += np.where(drop, TEMPO_DROP_PENALTY + np.minimum(0.9, (a - b) / a * 8), 0.0)
 
-    @staticmethod
-    def _nearest_neighbour(start: int, costs: List[List[float]]) -> List[int]:
-        n = len(costs)
-        visited = [False] * n
-        route = [start]
-        visited[start] = True
-        for _ in range(n - 1):
-            cur = route[-1]
-            nxt = min((j for j in range(n) if not visited[j]), key=lambda j: costs[cur][j])
-            visited[nxt] = True
-            route.append(nxt)
-        return route
-
-    @staticmethod
-    def _two_opt_pass(route: List[int], costs: List[List[float]], fixed_start: bool = False) -> bool:
-        n = len(route)
-        improved = False
-        a = 1 if fixed_start else 0
-        while a < n - 1:
-            fwd = [0.0] * n
-            rev = [0.0] * n
-            for t in range(n - 1):
-                fwd[t + 1] = fwd[t] + costs[route[t]][route[t + 1]]
-                rev[t + 1] = rev[t] + costs[route[t + 1]][route[t]]
-            applied = False
-            for b in range(a + 1, n):
-                old = fwd[b] - fwd[a]
-                new = rev[b] - rev[a]
-                if a > 0:
-                    old += costs[route[a - 1]][route[a]]
-                    new += costs[route[a - 1]][route[b]]
-                if b < n - 1:
-                    old += costs[route[b]][route[b + 1]]
-                    new += costs[route[a]][route[b + 1]]
-                if new - old < -1e-9:
-                    route[a:b + 1] = route[a:b + 1][::-1]
-                    improved = applied = True
-                    break
-            if not applied:
-                a += 1
-        return improved
-
-    @staticmethod
-    def _or_opt_pass(route: List[int], costs: List[List[float]], fixed_start: bool = False) -> bool:
-        def edge(u: Optional[int], v: Optional[int]) -> float:
-            return costs[u][v] if u is not None and v is not None else 0.0
-
-        n = len(route)
-        improved = False
-        first = 1 if fixed_start else 0
-        for i in range(first, n):
-            node = route[i]
-            prev = route[i - 1] if i > 0 else None
-            nxt = route[i + 1] if i < n - 1 else None
-            remove_delta = edge(prev, nxt) - edge(prev, node) - edge(node, nxt)
-            rest = route[:i] + route[i + 1:]
-            best_j, best_delta = None, -1e-9
-            for j in range(first, len(rest) + 1):
-                if j == i:
-                    continue
-                u = rest[j - 1] if j > 0 else None
-                v = rest[j] if j < len(rest) else None
-                delta = remove_delta + edge(u, node) + edge(node, v) - edge(u, v)
-                if delta < best_delta:
-                    best_j, best_delta = j, delta
-            if best_j is not None:
-                route[:] = rest[:best_j] + [node] + rest[best_j:]
-                improved = True
-        return improved
+        np.fill_diagonal(obj, 0.0)
+        return obj
 
     def optimize_order(self, songs: List[Song], start_id: Optional[str] = None) -> List[Song]:
         """Order songs with known keys for the smoothest harmonic path, optionally from a fixed opener."""
-        n = len(songs)
-        start_idx = next((i for i, s in enumerate(songs) if s.id == start_id), None) if start_id else None
-        if n <= 2:
-            if n == 2 and start_idx is None:
-                c01, _ = calculate_pairwise_cost(songs[0], songs[1])
-                c10, _ = calculate_pairwise_cost(songs[1], songs[0])
-                return list(songs) if c01 <= c10 else [songs[1], songs[0]]
-            if n == 2 and start_idx == 1:
-                return [songs[1], songs[0]]
+        if len(songs) <= 1:
             return list(songs)
-
-        costs = self._cost_matrix(songs)
-        if start_idx is not None:
-            starts = [start_idx]
-        else:
-            starts = range(n) if n <= 60 else [round(i * (n - 1) / 11) for i in range(12)]
-        route = min((self._nearest_neighbour(s, costs) for s in starts), key=lambda r: self._route_cost(r, costs))
-
-        fixed = start_idx is not None
-        for _ in range(self.max_passes):
-            changed = self._two_opt_pass(route, costs, fixed)
-            changed = self._or_opt_pass(route, costs, fixed) or changed
-            if not changed:
-                break
+        start = next((i for i, s in enumerate(songs) if s.id == start_id), None) if start_id else None
+        route = solve(self.objective_matrix(songs), start=start, seed=len(songs), time_limit=self.time_limit)
         return [songs[i] for i in route]
 
     def detect_removal_suggestions(self, sorted_songs: List[Song]) -> List[RemovalSuggestion]:
