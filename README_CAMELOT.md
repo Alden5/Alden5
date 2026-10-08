@@ -32,17 +32,38 @@ camelot-sorter              # or: python3 run_sorter.py
 
 Your browser opens at `http://localhost:8765`.
 
-1. Choose a playlist and press **Analyze & Sort**.
-2. Review the order. Each row shows the song's Camelot key and how well it mixes
-   into the next song. Green means a smooth mix and red means a key clash.
-3. Under **Suggested removals**, press **Remove** on any song you want to leave out,
-   or **Remove all suggested**. Removed songs can be restored.
-4. Optionally choose **Start with** to fix the opening song, or change **Flow**:
+1. Click a playlist in the sidebar. Its keys are calculated and it's sorted right away.
+2. Review the running order. Each row shows the song's Camelot key, BPM and where
+   the key came from. Between rows you can see how well each song mixes into the
+   next one: green is a smooth mix and red is a key clash. The **Set journey**
+   chart on the right shows tempo (or key) from the first song to the last.
+3. Choose a **Flow**:
    - *Build energy* prefers rising tempo and stepping up the wheel (8A → 9A → 10A).
-   - *Smoothest overall* minimizes clashes in either direction.
-5. Press **Create sorted playlist**. Running it again replaces the earlier
-   sorted copy. If you already have your own playlist with that name, the new one
-   is called `… sorted (2)` instead, and yours is not touched.
+   - *Smoothest* minimizes clashes in either direction.
+4. Under **Suggested removals**, press **Remove** on songs you want to leave out,
+   or **Keep it** to lock a song where it is.
+5. Press **Create sorted playlist**. The new playlist is built top to bottom in the
+   order shown. Running it again replaces the earlier sorted copy. If you already
+   have your own playlist with that name, the new one is called `… sorted (2)`
+   instead, and yours is not touched.
+
+### Shaping the order yourself
+
+The playlist is built from the top down. When you place a song, it's marked
+**Manual**, the songs above it stay where they are, and everything below it is
+re-sorted around your choice.
+
+- **Drag** a song by its handle to any spot, or use the move button to type a
+  position (or pick Top, Middle or Bottom).
+- The **pin** button locks a song where it is. Pressing it again unlocks the song,
+  and the order is re-sorted from that song down.
+- **Remove** (✕), or dragging a song onto the **Removed** tray, drops the song
+  and re-sorts the songs below it. You can drag removed songs back into the list
+  at any spot. **Restore** puts a song back where it fits best without moving
+  anything else.
+- **Re-sort** and **Flow** changes re-sort everything except manual songs.
+  **Clear manual** unlocks them all.
+- **Undo/Redo** (⌘Z / ⇧⌘Z) step through every change. Press `/` to filter the list.
 
 Try it without touching your library: `camelot-sorter --demo`.
 
