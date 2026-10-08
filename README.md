@@ -1,3 +1,10 @@
+# Projects in this Repository
+
+- **[Camelot DJ Apple Music Sorter](README_CAMELOT.md)**: An intelligent macOS app that uses the Camelot DJ system to calculate keys, rearrange Apple Music playlists into optimal harmonic order, suggest songs to remove, and export new `<Playlist> sorted` playlists.
+- **Wikipedia Death-Notice Monitor** (below): Service watching Wikipedia revisions for alerts.
+
+---
+
 # Wikipedia death-notice monitor
 
 This Python service watches Donald Trump's English Wikipedia article and sends
