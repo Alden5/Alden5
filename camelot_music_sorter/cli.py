@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--auto-remove-outliers", action="store_true", help="Leave suggested removals out of the new playlist")
     p.add_argument("--start", help="Title (or part of it) of the song to open the set with")
     p.add_argument("--strategy", choices=["gradual_build", "balanced"], default="gradual_build",
-                   help="gradual_build: step up the wheel for rising energy; balanced: smoothest in any direction")
+                   help="gradual_build: rising tempo and steps up the wheel; balanced: smoothest in any direction")
     p.add_argument("--no-audio-analysis", action="store_true", help="Only use keys from tags/comments")
     p.add_argument("--demo", action="store_true", help="Use the built-in sample library instead of Music.app")
     return p

@@ -137,7 +137,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
     <div class="field">
       <label for="strategy">Flow</label>
       <select id="strategy">
-        <option value="gradual_build">Build energy (step up the wheel)</option>
+        <option value="gradual_build">Build energy (rising tempo &amp; keys)</option>
         <option value="balanced">Smoothest overall</option>
       </select>
     </div>

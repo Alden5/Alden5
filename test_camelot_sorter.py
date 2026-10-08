@@ -20,8 +20,8 @@ from camelot_music_sorter.song_model import KeyResolver, Song
 from camelot_music_sorter.sorter import HarmonicPlaylistSorter, calculate_pairwise_cost
 
 
-def keyed(i, camelot, bpm=0.0, title=None):
-    s = Song(id=str(i), title=title or f"Track {i}", artist="Artist", bpm=bpm)
+def keyed(i, camelot, bpm=0.0, title=None, artist=None):
+    s = Song(id=str(i), title=title or f"Track {i}", artist=artist or f"Artist {i}", bpm=bpm)
     s.resolved_key = MusicalKey.from_camelot(camelot) if camelot else None
     return s
 
