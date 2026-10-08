@@ -40,12 +40,29 @@ Your browser opens at `http://localhost:8765`.
 3. Choose a **Flow**:
    - *Build energy* prefers rising tempo and stepping up the wheel (8A → 9A → 10A).
    - *Smoothest* minimizes clashes in either direction.
-4. Under **Suggested removals**, press **Remove** on songs you want to leave out,
-   or **Keep it** to lock a song where it is.
+4. Under **Trim the set**, choose how many songs you're willing to remove. The app
+   picks the songs whose removal helps most and summarizes the effect: key clashes,
+   smooth mixes and mixing friction before and after. Press **Remove these songs**
+   to apply the plan, **Remove** for a single song, or **Keep it** to lock a song so
+   it's never suggested. See [Trimming the set](#trimming-the-set) for details.
 5. Press **Create sorted playlist**. The new playlist is built top to bottom in the
    order shown. Running it again replaces the earlier sorted copy. If you already
    have your own playlist with that name, the new one is called `… sorted (2)`
    instead, and yours is not touched.
+
+### Trimming the set
+
+You set a limit on how many songs to remove. Within that limit, the app looks
+for the cuts that make the set flow best:
+
+- Each round, it tries removing the songs that are hardest to mix in and out of,
+  re-sorts the set without each one, and keeps the removal that helps most.
+- Songs that only fit with each other (for example two songs in a key far from
+  the rest) are tried as a group, since removing just one wouldn't fix anything.
+- It stops early when no removal helps much, so it never cuts songs just to use
+  up your limit. If going over your limit would fix another clash, it says so
+  and offers to raise it.
+- Songs you placed manually are never suggested and keep their place.
 
 ### Shaping the order yourself
 
@@ -73,6 +90,7 @@ Try it without touching your library: `camelot-sorter --demo`.
 camelot-sorter --list                                   # list playlists
 camelot-sorter -p "Friday Night House"                  # sort and create "Friday Night House sorted"
 camelot-sorter -p "Friday Night House" --dry-run        # preview only
+camelot-sorter -p "Friday Night House" --max-remove 3 --dry-run   # cut up to 3 songs and show the effect
 camelot-sorter -p "Friday Night House" --auto-remove-outliers --start "Deep Inside"
 ```
 

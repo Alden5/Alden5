@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-browser", action="store_true", help="Don't open the browser automatically")
     p.add_argument("--dry-run", action="store_true", help="Show the result without creating a playlist")
     p.add_argument("--auto-remove-outliers", action="store_true", help="Leave suggested removals out of the new playlist")
+    p.add_argument("--max-remove", type=int, metavar="N",
+                   help="Remove up to N songs, picking the ones whose removal improves the mix the most")
     p.add_argument("--start", help="Title (or part of it) of the song to open the set with")
     p.add_argument("--strategy", choices=["gradual_build", "balanced"], default="gradual_build",
                    help="gradual_build: rising tempo and steps up the wheel; balanced: smoothest in any direction")
@@ -97,7 +99,8 @@ def _run(args, bridge: AppleMusicBridge) -> int:
             return 1
         start_id = match.id
 
-    result = HarmonicPlaylistSorter(energy_flow_preference=args.strategy).sort_and_analyze(songs, start_id)
+    sorter = HarmonicPlaylistSorter(energy_flow_preference=args.strategy)
+    result = sorter.sort_and_analyze(songs, start_id)
     summary = result.summary()
 
     print(f"\nSorted order for '{playlist['name']}':")
@@ -116,7 +119,24 @@ def _run(args, bridge: AppleMusicBridge) -> int:
         for s in result.unknown_key_songs:
             print(f"  ? {s.artist} – {s.title}: {s.key_note}")
 
-    if result.suggestions_to_remove:
+    if args.max_remove is not None:
+        plan = sorter.plan_removals(result.sorted_songs, args.max_remove, [start_id] if start_id else [])
+        print(f"\nTrimming (up to {plan.budget} songs): {plan.headline()}")
+        b, a = plan.baseline, plan.after
+        if plan.steps:
+            print(f"  Key clashes: {b.clashes} → {a.clashes}   Smooth mixes: {b.smooth}/{b.scored} → {a.smooth}/{a.scored}   "
+                  f"Friction: {b.friction:.1f} → {a.friction:.1f}")
+            for st in plan.steps:
+                print(f"  ✗ [{_key(st.song)}] {st.song.artist} – {st.song.title}")
+                print(f"      {st.reason}")
+        if plan.hint:
+            print(f"  {plan.hint}")
+        to_export = plan.final_order
+        if plan.steps:
+            print(f"\nNew order after trimming:")
+            for i, s in enumerate(to_export):
+                print(f"  {i + 1:3d}. [{_key(s):>3}] {s.artist} – {s.title}")
+    elif result.suggestions_to_remove:
         print("\nSuggested removals:")
         for sug in result.suggestions_to_remove:
             print(f"  ✗ [{_key(sug.song)}] {sug.song.artist} – {sug.song.title}")
@@ -125,8 +145,9 @@ def _run(args, bridge: AppleMusicBridge) -> int:
     else:
         print("\nNo removals suggested; every song fits the harmonic flow.")
 
-    to_export = result.sorted_songs
-    if args.auto_remove_outliers and result.suggestions_to_remove:
+    if args.max_remove is None:
+        to_export = result.sorted_songs
+    if args.max_remove is None and args.auto_remove_outliers and result.suggestions_to_remove:
         drop = {s.song.id for s in result.suggestions_to_remove}
         to_export = [s for s in to_export if s.id not in drop]
         print(f"\nLeaving out {len(drop)} suggested song(s).")
