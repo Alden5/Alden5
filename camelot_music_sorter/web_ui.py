@@ -6,6 +6,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Camelot DJ Sorter</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%2322d3ee'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%230d0f17'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #0d0f17; --panel: #161a29; --card: #1e2438; --border: #2b3553;
@@ -65,7 +66,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .empty strong { color: var(--text); font-size: 16px; display: block; margin-bottom: 6px; }
 
   .overview { display: grid; grid-template-columns: 1fr 220px; gap: 16px; margin-bottom: 16px; }
-  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .metric { padding: 14px 16px; }
   .metric .t { font-size: 11px; color: var(--dim); text-transform: uppercase; font-weight: 700; letter-spacing: .4px; }
   .metric .v { font-size: 26px; font-weight: 800; margin: 4px 0 2px; }
@@ -114,7 +115,6 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   @media (max-width: 900px) {
     .controls { grid-template-columns: 1fr 1fr; }
     .overview { grid-template-columns: 1fr; }
-    .metrics { grid-template-columns: repeat(2, 1fr); }
     .col-std, .col-src { display: none; }
   }
 </style>

@@ -1,117 +1,112 @@
-# Camelot DJ Apple Music Sorter (macOS)
+# Camelot DJ Sorter for Apple Music (macOS)
 
-An intelligent DJ app for **macOS Apple Music** that organizes playlists using the **Camelot Wheel harmonic mixing system**.
+Takes an Apple Music playlist, works out the key of every song, puts the songs
+in the smoothest harmonic mixing order using the Camelot wheel, suggests songs
+that don't fit, and saves the result as a **new playlist named
+`<original name> sorted`**. Your original playlist is never changed.
 
-Unlike DJ software such as Rekordbox or Mixed In Key (which analyze song keys but don't automatically optimize or reorder your Apple Music playlists), this app:
-1. **Reads your Apple Music playlists directly on macOS** (via native AppleScript / Music.app bridge).
-2. **Calculates & resolves musical keys** for every song:
-   - Reads existing Camelot or standard key metadata tags (from comments, grouping, or key fields).
-   - Direct audio analysis using FFT Chromagram analysis + Krumhansl-Schmuckler & Temperley pitch profiles for local audio files (MP3, AAC/M4A, AIFF, WAV, FLAC).
-   - Deterministic harmonic key estimation fallback for streaming tracks without tags.
-3. **Harmonically reorders the playlist** into the smoothest possible DJ set progression:
-   - Minimizes harmonic clash using 2-opt TSP graph optimization with Camelot wheel rules (exact key match, relative major/minor, adjacent hour moves $\pm 1$, energy boost $+2$, and tempo progression).
-   - Supports **Energy Ascent / Gradual Build** (moving up the wheel) or **Balanced Flow**.
-4. **Suggests songs to remove**:
-   - Detects severe harmonic bottlenecks and isolated outliers (e.g. an outlier track that clashes with the playlist's dominant tonal cluster or breaks the flow).
-   - Explains *why* the song was flagged and offers musical advice.
-5. **Creates a new playlist in Apple Music**:
-   - Duplicates the sorted tracks into a brand-new playlist with `sorted` appended to the name (e.g., `Summer Vibes` &rarr; `Summer Vibes sorted`), leaving your original playlist untouched!
+## Setup
 
----
-
-## Quick Start on macOS
-
-### Prerequisites
-- macOS with **Apple Music / Music.app**
-- Python 3.9+ (pre-installed on macOS)
-- `ffmpeg` (optional, for direct raw audio file key extraction: `brew install ffmpeg`)
-
-### Installation
-
-Clone the repository and install dependencies:
+You need macOS with the Music app and Python 3.9 or newer. If `python3
+--version` asks you to install developer tools, accept the prompt.
 
 ```bash
 git clone https://github.com/Alden5/Alden5.git
 cd Alden5
-pip3 install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+brew install ffmpeg        # optional but recommended: enables audio key detection
 ```
 
----
+The first time the app talks to Music, macOS asks whether Terminal may control
+Music. Click **OK**. If you clicked "Don't Allow", turn it back on in
+**System Settings → Privacy & Security → Automation → Terminal → Music**.
 
-## Usage
-
-### 1. Interactive Web UI (Recommended)
-
-Launch the modern DJ dashboard:
+## Using the app
 
 ```bash
-python3 run_sorter.py --web
-```
-Or simply:
-```bash
-python3 run_sorter.py
-```
-Open your browser at **`http://localhost:8765`**.
-
-In the web interface:
-1. Select any playlist from your Apple Music library.
-2. Select your harmonic flow preference (*Energy Ascent* or *Balanced Flow*).
-3. Click **Sort & Analyze** to inspect keys, harmonic improvement, and transition flow.
-4. Review **Recommended Songs to Remove** (with 1-click exclusion).
-5. Click **Apply to Apple Music (Create Playlist)**. A new playlist named `<Playlist Name> sorted` is immediately created in your Music app!
-
----
-
-### 2. Command Line Interface (CLI)
-
-#### List playlists in Apple Music:
-```bash
-python3 run_sorter.py --list
+source .venv/bin/activate   # in each new Terminal window
+camelot-sorter              # or: python3 run_sorter.py
 ```
 
-#### Sort a playlist and create the sorted version in Apple Music:
+Your browser opens at `http://localhost:8765`.
+
+1. Choose a playlist and press **Analyze & Sort**.
+2. Review the order. Each row shows the song's Camelot key and how well it mixes
+   into the next song. Green means a smooth mix and red means a key clash.
+3. Under **Suggested removals**, press **Remove** on any song you want to leave out,
+   or **Remove all suggested**. Removed songs can be restored.
+4. Optionally choose **Start with** to fix the opening song, or change **Flow**:
+   - *Build energy* prefers stepping up the wheel (8A → 9A → 10A).
+   - *Smoothest overall* minimizes clashes in either direction.
+5. Press **Create sorted playlist**. Running it again replaces the earlier
+   sorted copy. If you already have your own playlist with that name, the new one
+   is called `… sorted (2)` instead, and yours is not touched.
+
+Try it without touching your library: `camelot-sorter --demo`.
+
+### Command line
+
 ```bash
-python3 run_sorter.py --playlist "Friday Night House"
+camelot-sorter --list                                   # list playlists
+camelot-sorter -p "Friday Night House"                  # sort and create "Friday Night House sorted"
+camelot-sorter -p "Friday Night House" --dry-run        # preview only
+camelot-sorter -p "Friday Night House" --auto-remove-outliers --start "Deep Inside"
 ```
 
-#### Dry-run preview without modifying Apple Music:
+## Where keys come from
+
+Music doesn't store musical keys, so each song's key is found in this order:
+
+1. **Comments or Grouping in Music.** Text such as `8A`, `8A - Energy 6`, `Am`,
+   `F# minor` or Open Key `1m` is recognized. Mixed In Key writes keys here, and
+   you can type them in yourself with **Get Info → Comments**.
+2. **A key tag inside the audio file** (ID3 `TKEY` or iTunes `initialkey`), as
+   written by Rekordbox, Mixed In Key, Traktor and similar tools.
+3. **Audio analysis** of downloaded, non-DRM files (MP3, AAC/M4A, AIFF, WAV,
+   FLAC). This uses ffmpeg plus chroma / Krumhansl–Kessler key profiles. The
+   result shows a confidence percentage. Results are cached, so later runs are
+   instant.
+
+Apple Music streaming songs and DRM-protected downloads can't be analyzed. If
+one of these has no key in Comments or Grouping, it is marked **?** and placed
+at the end instead of being given a guessed key. To include it, add its key to
+Comments in Music and press **↻**.
+
+## How sorting works
+
+Each pair of songs gets a mixing cost based on Camelot rules:
+
+| Move | Example | Cost |
+|---|---|---:|
+| Same key | 8A → 8A | 0 |
+| Relative major/minor | 8A ↔ 8B | 0.2 |
+| One step around the wheel | 8A → 9A / 7A | 0.5 |
+| Diagonal step | 8A → 9B | 1.4 |
+| Two steps (energy boost) | 8A → 10A | 2.5 |
+| Three or more steps | 8A → 11A … 2A | 4.5 – 8.5 |
+
+If BPM is set in Music, tempo jumps of more than about 6% add to the cost. Half
+and double time (87 ↔ 174) count as compatible. The app searches for the order
+with the lowest total cost, using nearest-neighbour seeding followed by 2-opt and
+Or-opt local search.
+
+A song is **suggested for removal** in either of these cases:
+
+- It belongs to a small minority (no more than a quarter of the playlist) whose
+  keys are 4 or more steps from the playlist's tonal center, and none of the
+  other songs mix into it smoothly.
+- It sits between two songs that mix well with each other, but it clashes with
+  both of them.
+
+## Privacy and safety
+
+The web app only listens on `127.0.0.1` and refuses requests from other
+websites. Nothing leaves your Mac.
+
+## Tests
+
 ```bash
-python3 run_sorter.py --playlist "Friday Night House" --dry-run
-```
-
-#### Automatically exclude suggested outlier tracks:
-```bash
-python3 run_sorter.py --playlist "Friday Night House" --auto-remove-outliers
-```
-
----
-
-## Camelot DJ System Reference
-
-The Camelot Wheel maps 24 major and minor keys into an easy 12-hour clock:
-
-| Camelot | Musical Key | Camelot | Musical Key |
-| :---: | :---: | :---: | :---: |
-| **1B** / **1A** | B major / G# minor | **7B** / **7A** | F major / D minor |
-| **2B** / **2A** | F# major / D# minor | **8B** / **8A** | C major / A minor |
-| **3B** / **3A** | Db major / Bb minor | **9B** / **9A** | G major / E minor |
-| **4B** / **4A** | Ab major / F minor | **10B** / **10A** | D major / B minor |
-| **5B** / **5A** | Eb major / C minor | **11B** / **11A** | A major / F# minor |
-| **6B** / **6A** | Bb major / G minor | **12B** / **12A** | E major / C# minor |
-
-### Transition Rules
-- **Same Key** (e.g. `8A` &rarr; `8A`): Perfect harmonic continuity.
-- **Relative Major/Minor** (e.g. `8A` &harr; `8B`): Seamless mood shift with identical pitch collection.
-- **Harmonic Step** (e.g. `8A` &rarr; `9A` or `7A`): Smooth harmonic modulation.
-- **Energy Boost** (e.g. `8A` &rarr; `10A`): +2 hour jump for peak-time excitement.
-- **Outliers / Jarring Clashes** (e.g. `8A` &rarr; `2A`): Tritone / opposite wheel dissonance identified and flagged for removal.
-
----
-
-## Running Automated Tests
-
-Run the test suite across harmonic analysis, Camelot transitions, audio DSP, and API endpoints:
-
-```bash
-python3 -m unittest discover -v
+python3 -m unittest -v
 ```

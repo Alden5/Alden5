@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="camelot-music-sorter",
-    version="1.0.0",
+    version="1.1.0",
     description="Harmonically organize Apple Music playlists on macOS using the Camelot DJ System",
     author="Camelot DJ Sorter",
     packages=find_packages(),
