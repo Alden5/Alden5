@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .camelot import MusicalKey, transition_score
-from .optimizer import solve, solve_slots
+from .optimizer import path_cost, solve, solve_slots
 from .song_model import Song
 
 SMOOTH_THRESHOLD = 2.5
@@ -26,6 +26,7 @@ SAME_ARTIST_PENALTY = 0.6
 DUPLICATE_PENALTY = 25.0
 BUILD_STEP_BONUS = 0.15
 TEMPO_DROP_PENALTY = 0.1
+MIN_REMOVAL_GAIN = 1.0
 
 
 @dataclass
@@ -44,6 +45,67 @@ class RemovalSuggestion:
     reason: str
     isolated_clash_score: float
     alternative_suggestion: str
+
+
+@dataclass
+class SetMetrics:
+    clashes: int
+    smooth: int
+    scored: int
+    friction: float
+    objective: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"clashes": self.clashes, "smooth": self.smooth, "scored": self.scored,
+                "friction": round(self.friction, 2), "objective": round(self.objective, 2)}
+
+
+@dataclass
+class RemovalStep:
+    song: Song
+    reason: str
+    gain: float
+    metrics: SetMetrics
+
+
+@dataclass
+class RemovalPlan:
+    baseline: SetMetrics
+    steps: List[RemovalStep]
+    final_order: List[Song]
+    budget: int
+    stopped_early: bool
+    hint: str = ""
+    hint_budget: int = 0
+
+    @property
+    def after(self) -> SetMetrics:
+        return self.steps[-1].metrics if self.steps else self.baseline
+
+    def headline(self) -> str:
+        b, a, n = self.baseline, self.after, len(self.steps)
+        if not n:
+            if not self.budget:
+                return "Set how many songs you're willing to remove."
+            if b.clashes:
+                return (f"No removal within your limit of {self.budget} fixes "
+                        f"{'the key clash' if b.clashes == 1 else 'any of the key clashes'}.")
+            return "Nothing worth removing: every song already mixes in well."
+        songs = f"{n} song{'s' if n != 1 else ''}"
+        parts = []
+        if b.clashes:
+            fixed = b.clashes - a.clashes
+            if a.clashes == 0:
+                parts.append({1: "fixes the key clash", 2: "fixes both key clashes"}.get(
+                    b.clashes, f"fixes all {b.clashes} key clashes"))
+            elif fixed > 0:
+                parts.append(f"fixes {fixed} of {b.clashes} key clashes")
+        if b.friction > 0 and a.friction < b.friction:
+            parts.append(f"cuts mixing friction by {round(100 * (b.friction - a.friction) / b.friction)}%")
+        text = f"Removing {songs} " + (" and ".join(parts) if parts else "makes the set flow more smoothly") + "."
+        if self.stopped_early and n < self.budget:
+            text += f" Removing more wouldn't help much, so only {n} of your {self.budget} are suggested."
+        return text
 
 
 @dataclass
@@ -348,3 +410,140 @@ class HarmonicPlaylistSorter:
     def sort_and_analyze(self, songs: List[Song], start_id: Optional[str] = None) -> SortResult:
         manual = {start_id: 0} if start_id and any(s.id == start_id for s in songs) else None
         return self.arrange(songs, manual=manual)
+
+    def measure(self, order: List[Song]) -> SetMetrics:
+        friction, transitions = evaluate_playlist_order(order)
+        scored = [t for t in transitions if not t.is_unknown]
+        smooth = sum(1 for t in scored if t.is_smooth)
+        objective = path_cost(list(range(len(order))), self.objective_matrix(order)) if len(order) > 1 else 0.0
+        return SetMetrics(len(scored) - smooth, smooth, len(scored), friction, objective)
+
+    def plan_removals(self, order: List[Song], budget: int, manual_ids: Sequence[str] = (),
+                      time_budget: float = 6.0) -> RemovalPlan:
+        """
+        Pick up to `budget` songs whose removal helps the set most.
+
+        Greedy: each round tries the songs that cost the most to mix in and out
+        of in the current order, re-sorts the set without each one (manual songs
+        stay pinned and are never removed), and keeps the removal with the
+        biggest improvement. Stops early once no removal gains at least
+        MIN_REMOVAL_GAIN, so songs aren't cut just to use up the budget.
+        """
+        manual_ids = set(manual_ids)
+        budget = max(0, min(int(budget), len(order) - 3))
+        baseline = self.measure(order)
+        if budget == 0 or len(order) < 4:
+            return RemovalPlan(baseline, [], list(order), max(0, int(budget)), False)
+
+        outlier_reasons = {s.song.id: s.reason for s in self.detect_removal_suggestions(order)}
+        k = 6 if len(order) <= 60 else 4
+        evaluator = HarmonicPlaylistSorter(self.energy_flow_preference,
+                                           time_limit=max(0.05, min(0.4, time_budget / (budget * (k + 1)))))
+
+        def pins(songs: List[Song]) -> Dict[str, int]:
+            return {s.id: i for i, s in enumerate(songs) if s.id in manual_ids}
+
+        current = evaluator.arrange_order(order, manual=pins(order))
+        cur_metrics = self.measure(current)
+        if cur_metrics.objective > baseline.objective:
+            current, cur_metrics = list(order), baseline
+
+        def best_removal(current: List[Song], cur_metrics: SetMetrics, max_group: int):
+            C = self.objective_matrix(current)
+            n = len(current)
+            local = []
+            for i, s in enumerate(current):
+                if s.id in manual_ids or not s.resolved_key:
+                    continue
+                d = (C[i - 1, i] if i > 0 else 0.0) + (C[i, i + 1] if i < n - 1 else 0.0)
+                if 0 < i < n - 1:
+                    d -= C[i - 1, i + 1]
+                local.append((d, i))
+            candidates = {(i,) for _, i in sorted(local, reverse=True)[:k]}
+            candidates |= {(i,) for i, s in enumerate(current) if s.id in outlier_reasons and s.id not in manual_ids}
+            candidates |= set(self._islands(current, max_group, manual_ids))
+            best = None
+            for group in sorted(candidates):
+                rest = [s for j, s in enumerate(current) if j not in group]
+                arranged = evaluator.arrange_order(rest, manual=pins(rest))
+                m = self.measure(arranged)
+                per_song = (cur_metrics.objective - m.objective) / len(group)
+                if best is None or per_song > best[0] + 1e-9:
+                    best = (per_song, group, arranged, m)
+            return best if best and best[0] >= MIN_REMOVAL_GAIN else None
+
+        steps: List[RemovalStep] = []
+        stopped_early = False
+        while len(steps) < budget and len(current) > 3:
+            best = best_removal(current, cur_metrics, min(3, budget - len(steps)))
+            if best is None:
+                stopped_early = True
+                break
+            per_song, group, arranged, m = best
+            for i in group:
+                song = current[i]
+                reason = outlier_reasons.get(song.id) or self._removal_reason(current, i)
+                if len(group) > 1:
+                    others = ", ".join(f"“{current[j].title}”" for j in group if j != i)
+                    reason += f" Removed together with {others}: they only fit with each other."
+                steps.append(RemovalStep(song, reason, per_song, m))
+            current, cur_metrics = arranged, m
+
+        hint, hint_budget = "", 0
+        if cur_metrics.clashes and len(current) > 3:
+            more = best_removal(current, cur_metrics, 3)
+            if more is not None:
+                _, group, _, m = more
+                names = [f"“{current[j].title}”" for j in group]
+                titles = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+                fixed = cur_metrics.clashes - m.clashes
+                effect = (f"fix {('the last' if steps else 'the') if m.clashes == 0 and fixed == 1 else fixed} key clash{'es' if fixed > 1 else ''}"
+                          if fixed > 0 else "make the set smoother")
+                total = hint_budget = len(steps) + len(group)
+                hint = (f"Allowing {total} removal{'s' if total != 1 else ''} would{' also' if steps else ''} "
+                        f"take out {titles} and {effect}.")
+
+        return RemovalPlan(baseline, steps, current, budget, stopped_early, hint, hint_budget)
+
+    @staticmethod
+    def _islands(order: List[Song], max_len: int, manual_ids: set) -> List[Tuple[int, ...]]:
+        """Runs of 2..max_len songs cut off from the rest of the set by a key clash on at least one side."""
+        n = len(order)
+        clash = [bool(order[i].resolved_key and order[i + 1].resolved_key
+                      and calculate_pairwise_cost(order[i], order[i + 1])[0] > SMOOTH_THRESHOLD)
+                 for i in range(n - 1)]
+        islands = []
+        for start in range(n):
+            for length in range(2, max_len + 1):
+                end = start + length - 1
+                if end >= n:
+                    break
+                run = order[start:end + 1]
+                if any(s.id in manual_ids or not s.resolved_key for s in run) or any(clash[start:end]):
+                    continue
+                left = start > 0 and clash[start - 1]
+                right = end < n - 1 and clash[end]
+                if left or right:
+                    islands.append(tuple(range(start, end + 1)))
+        return islands
+
+    @staticmethod
+    def _removal_reason(order: List[Song], i: int) -> str:
+        song = order[i]
+        parts = []
+        for a, b, label in ((order[i - 1] if i > 0 else None, song, "in from"),
+                            (song, order[i + 1] if i + 1 < len(order) else None, "out to")):
+            if a is None or b is None:
+                continue
+            cost, desc = calculate_pairwise_cost(a, b)
+            other = b if label == "out to" else a
+            if cost > SMOOTH_THRESHOLD:
+                if a.resolved_key and b.resolved_key and transition_score(a.resolved_key, b.resolved_key)[0] <= SMOOTH_THRESHOLD:
+                    why = f"the keys work but the tempo jumps {a.bpm:.0f}→{b.bpm:.0f} BPM"
+                else:
+                    why = desc[:1].lower() + desc[1:]
+                parts.append(f"mixing {label} “{other.title}” is rough ({why})")
+        key = song.resolved_key.camelot if song.resolved_key else "?"
+        if parts:
+            return f"{key}: " + "; ".join(parts) + ", and no other spot in the set fits it better."
+        return f"{key} fits the set less well than the rest; the songs either side of it mix better without it."
