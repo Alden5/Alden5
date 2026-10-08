@@ -62,6 +62,97 @@ def solve(C: np.ndarray, start: Optional[int] = None, seed: int = 0,
     return best
 
 
+def solve_slots(C: np.ndarray, slots: List[Optional[int]], free: List[int], seed: int = 0,
+                time_limit: float = 2.5) -> List[int]:
+    """
+    Fill the empty (None) positions of `slots` with the songs in `free`,
+    keeping every pre-filled position where it is, so the whole sequence has
+    the lowest path cost found.
+    """
+    C = np.asarray(C, dtype=float)
+    N = len(slots)
+    free_pos = [p for p, s in enumerate(slots) if s is None]
+    if len(free_pos) != len(free):
+        raise ValueError("number of free songs must match number of empty slots")
+    if not free:
+        return list(slots)
+
+    first = free_pos[0]
+    if free_pos == list(range(first, N)):
+        # Only the tail is open: an ordinary path problem starting from the last fixed song.
+        if first == 0:
+            route = solve(C[np.ix_(free, free)], seed=seed, time_limit=time_limit)
+            return [free[i] for i in route]
+        nodes = [slots[first - 1]] + list(free)
+        route = solve(C[np.ix_(nodes, nodes)], start=0, seed=seed, time_limit=time_limit)
+        return list(slots[:first]) + [nodes[i] for i in route[1:]]
+
+    deadline = time.monotonic() + time_limit
+    seq = list(slots)
+    remaining = set(free)
+    for p in free_pos:
+        prev = seq[p - 1] if p > 0 else None
+        nxt = slots[p + 1] if p + 1 < N else None
+
+        def score(j: int) -> float:
+            return (C[prev, j] if prev is not None else 0.0) + (C[j, nxt] if nxt is not None else 0.0)
+
+        pick = min(sorted(remaining), key=score)
+        seq[p] = pick
+        remaining.remove(pick)
+    return _anneal(seq, free_pos, C, random.Random(seed), deadline)
+
+
+def _anneal(seq: List[int], free_pos: List[int], C: np.ndarray, rng: random.Random, deadline: float) -> List[int]:
+    """Simulated annealing over the free positions: swaps anywhere, reversals inside a gap."""
+    N = len(seq)
+    Cl = C.tolist()
+    gaps, run = [], [free_pos[0]]
+    for p in free_pos[1:]:
+        if p == run[-1] + 1:
+            run.append(p)
+        else:
+            gaps.append(run)
+            run = [p]
+    gaps.append(run)
+    long_gaps = [g for g in gaps if len(g) >= 2]
+
+    def edges(ts) -> float:
+        return sum(Cl[seq[t]][seq[t + 1]] for t in ts if 0 <= t < N - 1)
+
+    cur = edges(range(N - 1))
+    best, best_seq = cur, list(seq)
+    iterations = min(150_000, 4000 * len(free_pos))
+    t_start, t_end = 3.0, 0.02
+    for it in range(iterations):
+        if it % 2048 == 0 and time.monotonic() > deadline:
+            break
+        temp = t_start * (t_end / t_start) ** (it / iterations)
+        if len(free_pos) < 2:
+            break
+        swap = not long_gaps or rng.random() < 0.5
+        if swap:
+            a, b = rng.sample(free_pos, 2)
+            touched = {a - 1, a, b - 1, b}
+            before = edges(touched)
+            seq[a], seq[b] = seq[b], seq[a]
+        else:
+            a, b = sorted(rng.sample(rng.choice(long_gaps), 2))
+            touched = range(a - 1, b + 1)
+            before = edges(touched)
+            seq[a:b + 1] = seq[a:b + 1][::-1]
+        delta = edges(touched) - before
+        if delta <= 0 or rng.random() < np.exp(-delta / temp):
+            cur += delta
+            if cur < best - 1e-9:
+                best, best_seq = cur, list(seq)
+        elif swap:
+            seq[a], seq[b] = seq[b], seq[a]
+        else:
+            seq[a:b + 1] = seq[a:b + 1][::-1]
+    return best_seq
+
+
 def _default_iterations(n: int) -> int:
     if n <= 80:
         return 400

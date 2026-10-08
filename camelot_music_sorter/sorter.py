@@ -12,12 +12,12 @@ energy).
 from __future__ import annotations
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from .camelot import MusicalKey, transition_score
-from .optimizer import solve
+from .optimizer import solve, solve_slots
 from .song_model import Song
 
 SMOOTH_THRESHOLD = 2.5
@@ -118,9 +118,14 @@ def artist_names(artist: str) -> frozenset:
     return frozenset(p for p in (x.strip() for x in _ARTIST_SPLIT.split((artist or "").lower())) if p)
 
 
+def _key_known_mask(songs: List[Song]) -> np.ndarray:
+    has = np.array([s.resolved_key is not None for s in songs], dtype=bool)
+    return has[:, None] & has[None, :]
+
+
 def musical_cost_matrix(songs: List[Song]) -> np.ndarray:
-    """Vectorized calculate_pairwise_cost for every ordered pair of songs with known keys."""
-    k = np.array([_key_index(s.resolved_key) for s in songs])
+    """Vectorized calculate_pairwise_cost for every ordered pair of songs."""
+    k = np.array([_key_index(s.resolved_key) if s.resolved_key else 0 for s in songs], dtype=int)
     cost = _KEY_COST[k[:, None], k[None, :]].copy()
     bpm = np.array([s.bpm for s in songs], dtype=float)
     a, b = bpm[:, None], bpm[None, :]
@@ -128,6 +133,7 @@ def musical_cost_matrix(songs: List[Song]) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
         pct = np.minimum.reduce([np.abs(b - a), np.abs(b - 2 * a), np.abs(b - 0.5 * a)]) / a
     cost += np.where(known & (pct > 0.06), np.minimum(4.0, (pct - 0.06) * 25), 0.0)
+    cost = np.where(_key_known_mask(songs), cost, 5.0)
     np.fill_diagonal(cost, 0.0)
     return cost
 
@@ -144,7 +150,8 @@ class HarmonicPlaylistSorter:
 
     def objective_matrix(self, songs: List[Song]) -> np.ndarray:
         musical = musical_cost_matrix(songs)
-        obj = musical + CLASH_WEIGHT * (musical > SMOOTH_THRESHOLD)
+        keyed = _key_known_mask(songs)
+        obj = musical + CLASH_WEIGHT * ((musical > SMOOTH_THRESHOLD) & keyed)
 
         names = [artist_names(s.artist) for s in songs]
         pids = [s.persistent_id for s in songs]
@@ -159,8 +166,8 @@ class HarmonicPlaylistSorter:
                     obj[i, j] += SAME_ARTIST_PENALTY
 
         if self.energy_flow_preference == "gradual_build":
-            num = np.array([s.resolved_key.number for s in songs])
-            obj -= BUILD_STEP_BONUS * (((num[None, :] - num[:, None]) % 12) == 1)
+            num = np.array([s.resolved_key.number if s.resolved_key else 0 for s in songs])
+            obj -= BUILD_STEP_BONUS * ((((num[None, :] - num[:, None]) % 12) == 1) & keyed)
             bpm = np.array([s.bpm for s in songs], dtype=float)
             a, b = bpm[:, None], bpm[None, :]
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -248,12 +255,75 @@ class HarmonicPlaylistSorter:
         mid = (center - 1 + step * (min(diff, 12 - diff) // 2)) % 12 + 1
         return f"{mid}A/{mid}B"
 
-    def sort_and_analyze(self, songs: List[Song], start_id: Optional[str] = None) -> SortResult:
-        known = [s for s in songs if s.resolved_key]
-        unknown = [s for s in songs if not s.resolved_key]
+    def arrange_order(self, songs: List[Song], keep_ids: Sequence[str] = (),
+                      manual: Optional[Dict[str, int]] = None) -> List[Song]:
+        """
+        Order `songs` top to bottom while respecting the user's choices:
+        - `keep_ids` stay, in that order, at the top of the playlist;
+        - each `manual` song is pinned at its requested position (clamped to
+          the nearest position that is still open);
+        - every other song is placed by the optimizer around them, with
+          unknown-key songs at the bottom of the open positions.
+        """
+        by_id = {s.id: s for s in songs}
+        index = {s.id: i for i, s in enumerate(songs)}
+        n = len(songs)
+        slots: List[Optional[int]] = [None] * n
+        taken = set()
 
-        init_penalty, _ = evaluate_playlist_order(known)
-        ordered = self.optimize_order(known, start_id) + unknown
+        for pos, sid in enumerate(i for i in dict.fromkeys(keep_ids) if i in by_id):
+            slots[pos] = index[sid]
+            taken.add(sid)
+
+        pins = sorted(((p, sid) for sid, p in (manual or {}).items() if sid in by_id and sid not in taken),
+                      key=lambda x: (x[0], x[1]))
+        for want, sid in pins:
+            open_pos = [p for p in range(n) if slots[p] is None]
+            want = min(max(int(want), 0), n - 1)
+            pos = min(open_pos, key=lambda p: (abs(p - want), p))
+            slots[pos] = index[sid]
+            taken.add(sid)
+
+        free_known = [index[s.id] for s in songs if s.id not in taken and s.resolved_key]
+        free_unknown = [index[s.id] for s in songs if s.id not in taken and not s.resolved_key]
+        open_pos = [p for p in range(n) if slots[p] is None]
+        if free_unknown:
+            for p, i in zip(open_pos[len(open_pos) - len(free_unknown):], free_unknown):
+                slots[p] = i
+            open_pos = open_pos[:len(open_pos) - len(free_unknown)]
+
+        route = slots
+        if free_known:
+            # Only the edge into the first filled slot after the last open one can
+            # affect placement, and edges into unknown-key songs all cost the same.
+            cut = open_pos[-1] + 1
+            if cut < n and songs[slots[cut]].resolved_key:
+                cut += 1
+            route = solve_slots(self.objective_matrix(songs), slots[:cut], free_known,
+                                seed=n, time_limit=self.time_limit) + slots[cut:]
+        return [songs[i] for i in route]
+
+    def insert(self, ordered: List[Song], new_songs: List[Song]) -> List[Song]:
+        """Add songs one at a time at their cheapest position, leaving the rest of the order untouched."""
+        result = list(ordered)
+        for song in new_songs:
+            seq = result + [song]
+            C = self.objective_matrix(seq)
+            m = len(result)
+            best_pos, best_delta = m, None
+            for pos in range(m + 1):
+                prev = pos - 1 if pos > 0 else None
+                nxt = pos if pos < m else None
+                delta = (C[prev, m] if prev is not None else 0.0) + (C[m, nxt] if nxt is not None else 0.0)
+                if prev is not None and nxt is not None:
+                    delta -= C[prev, nxt]
+                if best_delta is None or delta < best_delta - 1e-9:
+                    best_pos, best_delta = pos, delta
+            result.insert(best_pos, song)
+        return result
+
+    def analyze_order(self, original: List[Song], ordered: List[Song]) -> SortResult:
+        init_penalty, _ = evaluate_playlist_order([s for s in original if s.resolved_key])
         final_penalty, transitions = evaluate_playlist_order(ordered)
 
         improvement = 0.0
@@ -261,12 +331,20 @@ class HarmonicPlaylistSorter:
             improvement = max(0.0, (init_penalty - final_penalty) / init_penalty * 100.0)
 
         return SortResult(
-            original_songs=songs,
+            original_songs=original,
             sorted_songs=ordered,
             transitions=transitions,
             suggestions_to_remove=self.detect_removal_suggestions(ordered),
             initial_total_penalty=init_penalty,
             final_total_penalty=final_penalty,
             improvement_percent=improvement,
-            unknown_key_songs=unknown,
+            unknown_key_songs=[s for s in ordered if not s.resolved_key],
         )
+
+    def arrange(self, songs: List[Song], keep_ids: Sequence[str] = (),
+                manual: Optional[Dict[str, int]] = None) -> SortResult:
+        return self.analyze_order(songs, self.arrange_order(songs, keep_ids, manual))
+
+    def sort_and_analyze(self, songs: List[Song], start_id: Optional[str] = None) -> SortResult:
+        manual = {start_id: 0} if start_id and any(s.id == start_id for s in songs) else None
+        return self.arrange(songs, manual=manual)
