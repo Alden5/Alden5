@@ -560,11 +560,11 @@ function moveSong(id, toIndex, { fromTray = false } = {}) {
   const order = currentOrder().filter(x => x !== id);
   toIndex = Math.max(0, Math.min(toIndex, order.length));
   order.splice(toIndex, 0, id);
-  const song = songById(id);
+  const title = fromTray ? excludedTitle(id) : (songById(id) || {}).title;
   run({ keep_ids: order.slice(0, toIndex), manual: pinsFor(order).concat([{ id, position: toIndex }]) }, {
     placed: id,
     mutate: () => { state.manual.add(id); if (fromTray) state.excluded.delete(id); },
-    message: `${fromTray ? 'Restored' : 'Placed'} <b>${esc(song ? song.title : 'song')}</b> at #${toIndex + 1} · songs below re-sorted`,
+    message: `${fromTray ? 'Restored' : 'Placed'} <b>${esc(title || 'song')}</b> at #${toIndex + 1} · songs below re-sorted`,
   });
 }
 
@@ -648,7 +648,7 @@ function render({ prevOrder = [], placed } = {}) {
   $('pl-title').textContent = data.playlist.name;
   const total = songs.reduce((a, x) => a + (x.duration_seconds || 0), 0);
   const manualCount = songs.filter(x => x.manual).length;
-  $('pl-meta').innerHTML = `${songs.length} songs · ${fmtLong(total)}` +
+  $('pl-meta').innerHTML = `${songs.length} songs` + (total ? ` · ${fmtLong(total)}` : '') +
     (data.excluded_songs.length ? ` · ${data.excluded_songs.length} removed` : '') +
     (manualCount ? ` · <b>${manualCount} placed manually</b>` : '');
   document.querySelectorAll('#flow button').forEach(b => { b.classList.toggle('on', b.dataset.flow === state.strategy); b.setAttribute('aria-checked', b.dataset.flow === state.strategy); });
@@ -660,7 +660,7 @@ function render({ prevOrder = [], placed } = {}) {
   $('m-clash').style.color = s.rough_transitions ? 'var(--red)' : 'var(--green)';
   $('m-improve').textContent = s.initial_penalty > 0 ? `−${Math.round(s.improvement_percent)}%` : '–';
   $('m-improve-s').textContent = `key & tempo friction ${s.initial_penalty} → ${s.final_penalty}`;
-  $('m-len').textContent = fmtLong(total);
+  $('m-len').textContent = total ? fmtLong(total) : `${songs.length} songs`;
   const bpms = songs.map(x => x.bpm).filter(b => b > 0);
   $('m-len-s').textContent = bpms.length ? `${Math.round(Math.min(...bpms))}–${Math.round(Math.max(...bpms))} BPM` : `${songs.length} songs`;
 
@@ -683,7 +683,7 @@ function renderTracks({ prevOrder = [], placed } = {}) {
   const q = $('filter').value.trim().toLowerCase();
   const flagged = new Set(data.suggestions.map(x => x.song.id));
   const prevIndex = new Map(prevOrder.map((id, i) => [id, i]));
-  const SRC = { metadata: 'Tag', file_tag: 'File tag', audio_analysis: 'Audio', unknown: 'No key' };
+  const SRC = { metadata: 'Comments', file_tag: 'File tag', audio_analysis: 'Audio', unknown: 'No key' };
   const parts = [];
   let shown = 0;
   songs.forEach((song, i) => {
