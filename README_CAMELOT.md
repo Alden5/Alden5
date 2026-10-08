@@ -40,7 +40,7 @@ Your browser opens at `http://localhost:8765`.
 3. Choose a **Flow**:
    - *Build energy* prefers rising tempo and stepping up the wheel (8A → 9A → 10A).
    - *Smoothest* minimizes clashes in either direction.
-4. Under **Trim the set**, choose how many songs you're willing to remove. The app
+4. In the **Trim** tab on the right, choose how many songs you're willing to remove. The app
    picks the songs whose removal helps most and summarizes the effect: key clashes,
    smooth mixes and mixing friction before and after. Press **Remove these songs**
    to apply the plan, **Remove** for a single song, or **Keep it** to lock a song so
@@ -81,6 +81,13 @@ re-sorted around your choice.
 - **Re-sort** and **Flow** changes re-sort everything except manual songs.
   **Clear manual** unlocks them all.
 - **Undo/Redo** (⌘Z / ⇧⌘Z) step through every change. Press `/` to filter the list.
+- **Keyboard:** click a song (or tab to it), then use ↑/↓ to select, ⌥↑/⌥↓ to move it
+  (this locks it), `L` to lock or unlock, `Delete` to remove, and `Enter` for the
+  song menu. The keyboard button in the header lists every shortcut.
+- While you drag a song, a **Drop here to remove** target appears at the bottom.
+  Removed songs are in the **Removed** tab, and the **Keys & flow** tab has the
+  Camelot wheel and the set journey chart. **Transitions** hides the mix notes
+  between rows for a compact list.
 
 Try it without touching your library: `camelot-sorter --demo`.
 

@@ -134,7 +134,10 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
   /* Track list */
   .tracks { position: relative; padding: 6px 0; }
-  .row { display: grid; grid-template-columns: 22px 26px 46px minmax(0, 1fr) auto 48px 46px 94px; gap: 10px; align-items: center;
+  .tracks, .list-head { --cols: 22px 26px 46px minmax(0, 1fr) auto 48px 46px 94px; }
+  .tracks.no-dur, .list-head.no-dur { --cols: 22px 26px 46px minmax(0, 1fr) auto 48px 94px; }
+  .no-dur .dur { display: none; }
+  .row { display: grid; grid-template-columns: var(--cols); gap: 10px; align-items: center;
          padding: 7px 12px 7px 8px; margin: 0 6px; border-radius: 9px; border: 1px solid transparent; background: var(--panel);
          position: relative; user-select: none; }
   .row:hover { background: var(--hover); }
@@ -189,7 +192,65 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .export .what strong { color: var(--text); }
 
   /* Side panel */
-  .side-panel { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 16px; }
+  .side-panel { position: sticky; top: 16px; max-height: calc(100vh - 104px); display: flex; flex-direction: column; overflow: hidden; }
+  .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--border); flex: none; }
+  .tabs button { flex: 1; border: none; background: none; height: 32px; border-radius: 7px; color: var(--dim); font-weight: 600; font-size: 13px;
+                 display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+  .tabs button:hover { color: var(--text); background: var(--hover); }
+  .tabs button.on { color: var(--text); background: var(--card); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tabs .count { font-size: 11px; font-weight: 800; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+                 background: rgba(248,113,113,.18); color: var(--red); }
+  .tabs .count:empty { display: none; }
+  .tabs [data-tab="removed"] .count { background: rgba(255,255,255,.08); color: var(--dim); }
+  .tab-panel { overflow-y: auto; flex: 1; min-height: 0; }
+  .tab-panel:not(.on) { display: none; }
+  .sub-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 0; font-size: 11px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: .5px; color: var(--dim); }
+  .sub-head .hint { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); }
+  .tray-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px 4px; }
+  .tray-head .hint { font-size: 12px; color: var(--faint); line-height: 1.4; }
+  .budget { white-space: nowrap; }
+  .budget .spin { margin-left: auto; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; visibility: hidden; }
+  .budget .spin.on { visibility: visible; }
+
+  .list-tools { display: flex; gap: 8px; align-items: center; }
+  .chip { height: 30px; border-radius: 15px; border: 1px solid var(--border); background: none; color: var(--dim); padding: 0 12px; font-size: 12px; font-weight: 600; }
+  .chip:hover { color: var(--text); }
+  .chip.on { color: var(--accent); border-color: rgba(34,211,238,.4); background: rgba(34,211,238,.08); }
+  .list-head { display: grid; grid-template-columns: var(--cols); gap: 10px; padding: 8px 20px 6px 14px; position: sticky; top: 0; z-index: 4;
+               background: var(--panel); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+               text-transform: uppercase; color: var(--faint); border-radius: 0; }
+  .list-head span:nth-child(2), .list-head span:nth-child(6), .list-head span:nth-child(7) { text-align: right; }
+  .tracks.compact .conn { display: none; }
+  .tracks.compact .row { padding-top: 4px; padding-bottom: 4px; margin-bottom: 2px; }
+  .title-wrap { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .pl-art.big { width: 52px; height: 52px; border-radius: 12px; font-size: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--faint); vertical-align: 1px; }
+  .status-dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .status-dot.warn { background: var(--yellow); }
+  .drop-remove { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 140%); z-index: 40; display: flex; align-items: center; gap: 8px;
+                 padding: 14px 26px; border-radius: 14px; background: #2a1520; border: 2px dashed rgba(248,113,113,.6); color: #fecaca; font-weight: 700;
+                 box-shadow: 0 12px 40px rgba(0,0,0,.6); transition: transform .18s ease-out, opacity .18s; pointer-events: none; opacity: 0; visibility: hidden; }
+  body.dragging-row .drop-remove { transform: translate(-50%, 0); pointer-events: auto; opacity: 1; visibility: visible; }
+  .drop-remove.over { background: #4a1a26; border-style: solid; transform: translate(-50%, 0) scale(1.05) !important; }
+  .row:focus { outline: none; }
+  .row:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .row.flagged:focus-visible { box-shadow: inset 3px 0 0 var(--red), 0 0 0 2px var(--accent); }
+  .actions .more { display: none; }
+  .menu { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .menu button { display: flex; align-items: center; gap: 9px; border: none; background: none; height: 32px; border-radius: 7px; padding: 0 8px; font-size: 13px; text-align: left; }
+  .menu button:hover { background: var(--hover); }
+  .menu button.danger { color: var(--red); }
+  .shortcuts { width: 280px; }
+  .shortcuts table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .shortcuts td { padding: 5px 0; color: var(--dim); }
+  .shortcuts td:first-child { white-space: nowrap; padding-right: 12px; color: var(--text); }
+  details.fix { display: inline; }
+  details.fix summary { display: inline; cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
+  details.fix summary::-webkit-details-marker { display: none; }
+  details.fix[open] summary { margin-right: 6px; }
+  .notice .close { float: right; background: none; border: none; color: inherit; opacity: .6; margin-left: 10px; }
+  .notice .close:hover { opacity: 1; }
   .panel-body { padding: 12px 14px; }
   .wheel-wrap { display: flex; justify-content: center; padding: 10px 0 4px; }
   .legend { display: flex; justify-content: center; gap: 14px; font-size: 11.5px; color: var(--faint); padding-bottom: 12px; }
@@ -250,7 +311,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
   @media (max-width: 1250px) {
     .grid { grid-template-columns: minmax(0, 1fr); }
-    .side-panel { position: static; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .side-panel { position: static; max-height: none; }
   }
   @media (max-width: 900px) {
     .app { grid-template-columns: 1fr; }
@@ -258,10 +319,32 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
     .content { padding: 18px 14px 0; }
     .export { margin: 16px -14px 0; padding: 12px 14px; }
     .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .row { grid-template-columns: 22px 24px 44px minmax(0, 1fr) 40px 94px; }
-    .row .tags, .row .dur { display: none; }
+    .tracks, .tracks.no-dur, .list-head, .list-head.no-dur { --cols: 22px 24px 44px minmax(0, 1fr) 40px 94px; }
+    .row .tags, .row .dur, .list-head span:nth-child(5), .list-head .dur { display: none; }
     .steps { grid-template-columns: 1fr; }
-    .filter { width: 100%; }
+    .card-head > div:first-child .hint { display: none; }
+    .list-tools { width: 100%; }
+    .filter { flex: 1; width: auto; }
+    aside { max-height: none; }
+    .pl-list { display: flex; gap: 6px; overflow-x: auto; padding: 0 12px 12px; flex: none; }
+    .pl { min-width: 190px; background: var(--panel); border: 1px solid var(--border); }
+    .side-head { padding-top: 2px; }
+    .brand { padding-bottom: 8px; }
+  }
+  @media (max-width: 640px) {
+    .tracks, .tracks.no-dur, .list-head, .list-head.no-dur { --cols: 22px 40px minmax(0, 1fr) 36px 32px; }
+    .row .handle, .list-head span:first-child { display: none; }
+    .row { padding-left: 10px; }
+    .actions .pin, .actions .rm, .actions .mv { display: none; }
+    .actions .more { display: inline-flex; }
+    .actions { opacity: 1; }
+    .head h2 { font-size: 21px; }
+    .pl-art.big { width: 42px; height: 42px; font-size: 15px; }
+    .toolbar { width: 100%; }
+    .toolbar .btn { padding: 0 10px; }
+    #shortcuts { display: none; }
+    .conn { padding-left: 30px; }
+    .export .what { font-size: 12px; }
   }
 </style>
 </head>
@@ -277,6 +360,8 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></symbol>
   <symbol id="i-sort" viewBox="0 0 24 24"><path d="M3 6h13M3 12h9M3 18h5"/><path d="m17 15 3 3 3-3M20 18V6"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
   <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
 </svg>
 
@@ -306,7 +391,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
       <div id="welcome" class="welcome">
         <h2>Mix your playlists in key</h2>
-        <p>Pick a playlist on the left. Every song's key is worked out, then the playlist is put in the smoothest harmonic order using the Camelot wheel. Your original playlist is never changed.</p>
+        <p>Pick a playlist from your library. Every song's key is worked out, then the playlist is put in the smoothest harmonic order using the Camelot wheel. Your original playlist is never changed.</p>
         <div class="steps">
           <div class="step"><div class="n">1</div><b>Calculate keys</b><span>From Comments/Grouping (Mixed In Key, Rekordbox), file tags, or the audio itself.</span></div>
           <div class="step"><div class="n">2</div><b>Shape the set</b><span>Drag a song anywhere to lock it in place. Everything below re-sorts around your choice.</span></div>
@@ -323,9 +408,9 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
       <div id="results" class="hidden">
         <div class="head">
-          <div>
-            <h2 id="pl-title"></h2>
-            <div class="meta" id="pl-meta"></div>
+          <div class="title-wrap">
+            <span class="pl-art big" id="pl-art"></span>
+            <div><h2 id="pl-title"></h2><div class="meta" id="pl-meta"></div></div>
           </div>
           <div class="toolbar">
             <div class="seg" id="flow" role="radiogroup" aria-label="Flow">
@@ -336,14 +421,15 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
             <button id="redo" class="btn" title="Redo (⇧⌘Z)"><svg class="i"><use href="#i-redo"/></svg></button>
             <button id="clear-manual" class="btn manual hidden" title="Unlock every manual song and re-sort everything"><svg class="i"><use href="#i-pin"/></svg>Clear manual</button>
             <button id="resort" class="btn" title="Re-sort everything except manual songs"><svg class="i"><use href="#i-sort"/></svg>Re-sort</button>
+            <button id="shortcuts" class="btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts"><svg class="i"><use href="#i-key"/></svg></button>
           </div>
         </div>
 
         <div class="stats">
           <div class="stat"><div class="t">Smooth mixes</div><div class="v" id="m-smooth" style="color:var(--green)">–</div><div class="meter"><div id="m-smooth-bar"></div></div></div>
           <div class="stat"><div class="t">Key clashes</div><div class="v" id="m-clash">–</div><div class="s">transitions that won't blend</div></div>
-          <div class="stat"><div class="t">Friction vs. original</div><div class="v" id="m-improve" style="color:var(--accent)">–</div><div class="s" id="m-improve-s"></div></div>
-          <div class="stat"><div class="t">Set length</div><div class="v" id="m-len">–</div><div class="s" id="m-len-s"></div></div>
+          <div class="stat"><div class="t">Smoother than original</div><div class="v" id="m-improve" style="color:var(--accent)">–</div><div class="s" id="m-improve-s"></div></div>
+          <div class="stat"><div class="t" id="m-len-t">Set length</div><div class="v" id="m-len">–</div><div class="s" id="m-len-s"></div></div>
         </div>
 
         <div id="unknown-notice" class="notice info"></div>
@@ -352,39 +438,46 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
           <div class="card">
             <div class="card-head">
               <div><h3>Running order</h3><div class="hint">Drag <svg class="i" style="width:12px;height:12px;vertical-align:-2px"><use href="#i-grip"/></svg> to place a song. It's marked manual and every song below it re-sorts.</div></div>
-              <div class="filter"><svg class="i"><use href="#i-search"/></svg><input id="filter" type="search" placeholder="Filter songs  ( / )" autocomplete="off"></div>
+              <div class="list-tools">
+                <button id="toggle-conn" class="chip on" title="Show how each song mixes into the next">Transitions</button>
+                <div class="filter"><svg class="i"><use href="#i-search"/></svg><input id="filter" type="search" placeholder="Filter songs  ( / )" autocomplete="off"></div>
+              </div>
             </div>
+            <div class="list-head" id="list-head"><span></span><span>#</span><span>Key</span><span>Song</span><span></span><span>BPM</span><span class="dur">Time</span><span></span></div>
             <div id="tracks" class="tracks"></div>
           </div>
 
-          <div class="side-panel">
-            <div class="card">
-              <div class="card-head"><h3>Keys in this set</h3></div>
-              <div class="wheel-wrap"><svg id="wheel" width="220" height="220" viewBox="-100 -100 200 200"></svg></div>
-              <div class="legend"><span><i style="background:#64748b"></i>Outer: major (B)</span><span><i style="background:#334155"></i>Inner: minor (A)</span></div>
+          <div class="side-panel card">
+            <div class="tabs" role="tablist">
+              <button role="tab" data-tab="trim">Trim<span class="count" id="tab-trim-count"></span></button>
+              <button role="tab" data-tab="keys">Keys &amp; flow</button>
+              <button role="tab" data-tab="removed">Removed<span class="count" id="tab-removed-count"></span></button>
             </div>
-            <div class="card">
-              <div class="card-head"><h3>Set journey</h3><span class="hint" id="journey-hint"></span></div>
-              <div class="panel-body"><svg id="journey" preserveAspectRatio="none"></svg><div class="journey-cap" id="journey-cap"></div></div>
-            </div>
-            <div id="trim-card" class="card">
-              <div class="card-head"><h3>Trim the set</h3><span class="hint" id="trim-status"></span></div>
+            <div class="tab-panel" data-panel="trim">
               <div class="budget">
-                <span>I'm willing to remove up to</span>
+                <span>Remove up to</span>
                 <div class="stepper"><button id="budget-dec" aria-label="Fewer">−</button><input id="budget" type="number" min="0" max="20" value="3" aria-label="Maximum songs to remove"><button id="budget-inc" aria-label="More">+</button></div>
                 <span>songs</span>
+                <span class="spin" id="trim-status" role="status" aria-label="Finding the best cuts"></span>
               </div>
               <div id="trim-body" class="trim-body"></div>
             </div>
-            <div class="card">
-              <div class="card-head"><h3>Removed</h3><button id="restore-all" class="btn sm hidden">Restore all</button></div>
+            <div class="tab-panel" data-panel="keys">
+              <div class="sub-head">Keys in this set</div>
+              <div class="wheel-wrap"><svg id="wheel" width="210" height="210" viewBox="-100 -100 200 200"></svg></div>
+              <div class="legend"><span><i style="background:#64748b"></i>Outer ring: major (B)</span><span><i style="background:#334155"></i>Inner: minor (A)</span></div>
+              <div class="sub-head">Set journey <span class="hint" id="journey-hint"></span></div>
+              <div class="panel-body"><svg id="journey" preserveAspectRatio="none"></svg><div class="journey-cap" id="journey-cap"></div></div>
+            </div>
+            <div class="tab-panel" data-panel="removed">
+              <div class="tray-head"><span class="hint">Drag songs back into the list, or restore them where they fit best.</span><button id="restore-all" class="btn sm hidden">Restore all</button></div>
               <div id="tray" class="tray"></div>
             </div>
           </div>
         </div>
 
         <div class="export">
-          <div class="what" id="export-what"></div>
+          <div class="what"><span id="export-status" class="status-dot"></span><span id="export-what"></span></div>
           <button id="export" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create sorted playlist</button>
         </div>
       </div>
@@ -392,6 +485,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   </main>
 </div>
 
+<div id="drop-remove" class="drop-remove"><svg class="i"><use href="#i-x"/></svg>Drop here to remove</div>
 <div id="popover" class="popover hidden"></div>
 <div id="toasts" class="toasts"></div>
 
@@ -406,8 +500,12 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const state = {
   playlists: [], playlistId: null, result: null, strategy: 'gradual_build',
   excluded: new Set(), manual: new Set(), busy: false, undo: [], redo: [], drag: null,
-  budget: 3, plan: null, planSeq: 0,
+  budget: 3, plan: null, planSeq: 0, tab: 'trim', showConn: true, focusId: null, dismissed: new Set(),
 };
+try {
+  state.tab = localStorage.getItem('camelot.tab') || 'trim';
+  state.showConn = localStorage.getItem('camelot.conn') !== '0';
+} catch (e) {}
 try { const b = parseInt(localStorage.getItem('camelot.budget'), 10); if (b >= 0 && b <= 20) state.budget = b; } catch (e) {}
 
 function pill(k) {
@@ -435,7 +533,7 @@ function toast(msg, { action, onAction, error = false, ms = 5000 } = {}) {
   el.innerHTML = `<span>${msg}</span>` + (action ? `<button>${esc(action)}</button>` : '');
   if (action) el.querySelector('button').addEventListener('click', () => { el.remove(); onAction(); });
   $('toasts').appendChild(el);
-  while ($('toasts').children.length > 3) $('toasts').firstElementChild.remove();
+  while ($('toasts').children.length > 2) $('toasts').firstElementChild.remove();
   setTimeout(() => el.remove(), ms);
 }
 
@@ -503,17 +601,21 @@ async function loadPlaylists() {
   }
 }
 
+function artFor(name) {
+  let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const initials = name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '♪';
+  return { bg: `linear-gradient(135deg, ${KEY_COLORS[h % 12]}, ${KEY_COLORS[(h >> 4) % 12]})`, initials };
+}
+
 function renderPlaylists() {
   const q = $('pl-search').value.trim().toLowerCase();
   const lists = state.playlists.filter(p => !q || p.name.toLowerCase().includes(q));
   if (!state.playlists.length) { $('pl-list').innerHTML = '<div class="side-empty">No playlists with songs found in Music.</div>'; return; }
   if (!lists.length) { $('pl-list').innerHTML = `<div class="side-empty">No playlists match “${esc(q)}”.</div>`; return; }
   $('pl-list').innerHTML = lists.map(p => {
-    let h = 0; for (const c of p.name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    const c1 = KEY_COLORS[h % 12], c2 = KEY_COLORS[(h >> 4) % 12];
-    const initials = p.name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '♪';
+    const art = artFor(p.name);
     return `<button class="pl${p.id === state.playlistId ? ' active' : ''}" data-playlist="${esc(p.id)}">
-      <span class="pl-art" style="background:linear-gradient(135deg, ${c1}, ${c2})">${esc(initials)}</span>
+      <span class="pl-art" style="background:${art.bg}">${esc(art.initials)}</span>
       <span class="pl-text"><div class="pl-name">${esc(p.name)}</div><div class="pl-meta">${p.track_count} songs${p.smart ? ' · Smart' : ''}</div></span>
     </button>`;
   }).join('');
@@ -673,6 +775,8 @@ function render({ prevOrder = [], placed } = {}) {
   const s = data.summary, songs = data.sorted_songs;
 
   $('pl-title').textContent = data.playlist.name;
+  const art = artFor(data.playlist.name);
+  $('pl-art').style.background = art.bg; $('pl-art').textContent = art.initials;
   const total = songs.reduce((a, x) => a + (x.duration_seconds || 0), 0);
   const manualCount = songs.filter(x => x.manual).length;
   $('pl-meta').innerHTML = `${songs.length} songs` + (total ? ` · ${fmtLong(total)}` : '') +
@@ -685,15 +789,23 @@ function render({ prevOrder = [], placed } = {}) {
   $('m-smooth-bar').style.width = s.scored_transitions ? `${100 * s.smooth_transitions / s.scored_transitions}%` : '0';
   $('m-clash').textContent = s.rough_transitions;
   $('m-clash').style.color = s.rough_transitions ? 'var(--red)' : 'var(--green)';
-  $('m-improve').textContent = s.initial_penalty > 0 ? `−${Math.round(s.improvement_percent)}%` : '–';
-  $('m-improve-s').textContent = `key & tempo friction ${s.initial_penalty} → ${s.final_penalty}`;
-  $('m-len').textContent = total ? fmtLong(total) : `${songs.length} songs`;
+  $('m-improve').textContent = s.initial_penalty > 0 ? `${Math.round(s.improvement_percent)}%` : '–';
+  $('m-improve-s').textContent = s.initial_penalty > 0 ? `mixing friction ${s.initial_penalty} → ${s.final_penalty}` : 'not enough keyed songs to compare';
   const bpms = songs.map(x => x.bpm).filter(b => b > 0);
-  $('m-len-s').textContent = bpms.length ? `${Math.round(Math.min(...bpms))}–${Math.round(Math.max(...bpms))} BPM` : `${songs.length} songs`;
+  const range = bpms.length ? `${Math.round(Math.min(...bpms))}–${Math.round(Math.max(...bpms))}` : '';
+  if (total) {
+    $('m-len-t').textContent = 'Set length'; $('m-len').textContent = fmtLong(total);
+    $('m-len-s').textContent = range ? `${range} BPM` : `${songs.length} songs`;
+  } else if (range) {
+    $('m-len-t').textContent = 'Tempo'; $('m-len').textContent = range; $('m-len-s').textContent = 'BPM range';
+  } else {
+    $('m-len-t').textContent = 'Songs'; $('m-len').textContent = songs.length; $('m-len-s').textContent = 'in the sorted playlist';
+  }
 
   const unknown = songs.filter(x => !x.resolved_key);
-  show('unknown-notice', unknown.length ? `<strong>${unknown.length} song${unknown.length > 1 ? 's have' : ' has'} no known key</strong> and ${unknown.length > 1 ? 'go' : 'goes'} to the bottom unless you place ${unknown.length > 1 ? 'them' : 'it'}. ` +
-    `Streaming and DRM-protected songs can't be analyzed. Add the key (e.g. <code>8A</code> or <code>Am</code>) to the song's Comments in Music, or analyze it with Mixed In Key / Rekordbox, then press ${icon('refresh')}.` : '');
+  const showUnknown = unknown.length && !state.dismissed.has(state.playlistId);
+  show('unknown-notice', showUnknown ? `<button class="close" data-dismiss title="Hide">${icon('x')}</button><strong>${unknown.length} song${unknown.length > 1 ? 's have' : ' has'} no known key</strong> and ${unknown.length > 1 ? 'go' : 'goes'} to the bottom unless you place ${unknown.length > 1 ? 'them' : 'it'}. ` +
+    `<details class="fix"><summary>How to fix</summary>Streaming and DRM-protected songs can't be analyzed. Add the key (e.g. <code>8A</code> or <code>Am</code>) to the song's Comments in Music, or analyze it with Mixed In Key / Rekordbox, then press ${icon('refresh')} in the sidebar.</details>` : '');
 
   renderTracks({ prevOrder, placed });
   renderWheel(songs);
@@ -701,7 +813,12 @@ function render({ prevOrder = [], placed } = {}) {
   schedulePlan();
   renderTray(data.excluded_songs);
 
-  $('export-what').innerHTML = `Creates <strong>“${esc(data.new_playlist_name)}”</strong> in Apple Music · ${songs.length} songs, top to bottom`;
+  const clashes = s.rough_transitions;
+  $('export-status').className = 'status-dot ' + (clashes ? 'warn' : 'ok');
+  $('export-what').innerHTML = `Creates <strong>“${esc(data.new_playlist_name)}”</strong> in Apple Music · ${songs.length} songs · ` +
+    (clashes ? `${clashes} key clash${clashes > 1 ? 'es' : ''} left` : 'every keyed mix is smooth');
+  $('tab-removed-count').textContent = data.excluded_songs.length || '';
+  setTab(state.tab, { quiet: true });
   updateControls();
 }
 
@@ -710,7 +827,10 @@ function renderTracks({ prevOrder = [], placed } = {}) {
   const q = $('filter').value.trim().toLowerCase();
   const flagged = new Set(planFresh() ? state.plan.steps.map(x => x.song.id) : []);
   const prevIndex = new Map(prevOrder.map((id, i) => [id, i]));
-  const SRC = { metadata: 'Comments', file_tag: 'File tag', audio_analysis: 'Audio', unknown: 'No key' };
+  const SRC = { metadata: 'from Comments/Grouping', file_tag: 'from the file tag', audio_analysis: 'from audio analysis', unknown: 'unknown' };
+  const noDur = !songs.some(x => x.duration_seconds > 0);
+  $('tracks').classList.toggle('no-dur', noDur); $('list-head').classList.toggle('no-dur', noDur);
+  $('tracks').classList.toggle('compact', !state.showConn);
   const parts = [];
   let shown = 0;
   songs.forEach((song, i) => {
@@ -723,22 +843,27 @@ function renderTracks({ prevOrder = [], placed } = {}) {
     if (!song.resolved_key) cls.push('unknown');
     if (song.id === placed) cls.push('placed');
     else if (prevIndex.size && prevIndex.get(song.id) !== i) cls.push('flash');
-    const src = song.key_source === 'audio_analysis' ? `Audio ${Math.round(song.confidence * 100)}%` : (SRC[song.key_source] || song.key_source);
-    parts.push(`<div class="${cls.join(' ')}" draggable="true" data-id="${esc(song.id)}" data-index="${i}">
+    const k = song.resolved_key;
+    const keyTitle = k ? `${k.camelot} · ${k.standard_name} · ${SRC[song.key_source] || song.key_source}` : (song.key_note || 'Key unknown');
+    let src = '';
+    if (song.key_source === 'audio_analysis') src = `<span class="tag src" title="${esc(song.key_note || 'Calculated from the audio')}">Audio ${Math.round(song.confidence * 100)}%</span>`;
+    else if (!k) src = `<span class="tag src" title="${esc(song.key_note || 'Key unknown')}">No key</span>`;
+    parts.push(`<div class="${cls.join(' ')}" draggable="true" tabindex="0" data-id="${esc(song.id)}" data-index="${i}" aria-label="${i + 1}. ${esc(song.title)} by ${esc(song.artist)}${k ? ', ' + esc(k.camelot) : ''}">
       <span class="handle" title="Drag to place this song">${icon('grip')}</span>
       <span class="pos">${i + 1}</span>
-      ${pill(song.resolved_key)}
+      <span title="${esc(keyTitle)}">${pill(k)}</span>
       <div class="song"><div class="title">${esc(song.title)}</div><div class="artist">${esc(song.artist)}${song.album ? ' · ' + esc(song.album) : ''}</div></div>
       <div class="tags">
         ${song.manual ? `<span class="tag manual" title="You placed this song. Sorting keeps it here.">${icon('pin')}Manual</span>` : ''}
         <span class="tag flag${flagged.has(song.id) ? '' : ' hidden'}" title="Suggested cut. See Trim the set">Suggested cut</span>
-        <span class="tag src" title="${esc(song.key_note || 'Where the key came from')}">${esc(src)}</span>
+        ${src}
       </div>
       <span class="bpm">${song.bpm > 0 ? Math.round(song.bpm) : '—'}</span>
       <span class="dur">${fmtTime(song.duration_seconds)}</span>
       <div class="actions">
         <button class="icon-btn pin${song.manual ? ' on' : ''}" data-act="pin" title="${song.manual ? 'Unlock: let sorting move this song' : 'Lock this song at this position'}">${icon('pin')}</button>
-        <button class="icon-btn" data-act="move" title="Move to position…">${icon('move')}</button>
+        <button class="icon-btn mv" data-act="menu" title="Move to position…">${icon('move')}</button>
+        <button class="icon-btn more" data-act="menu" title="Song options">${icon('more')}</button>
         <button class="icon-btn rm" data-act="remove" title="Remove from the sorted playlist">${icon('x')}</button>
       </div>
     </div>`);
@@ -751,6 +876,20 @@ function renderTracks({ prevOrder = [], placed } = {}) {
   if (!shown) parts.push(`<div class="no-match">No songs match “${esc(q)}”.</div>`);
   parts.push('<div class="drop-line" id="drop-line"><span></span></div>');
   $('tracks').innerHTML = parts.join('');
+  if (state.focusId) {
+    const row = $('tracks').querySelector(`.row[data-id="${CSS.escape(state.focusId)}"]`);
+    state.focusId = null;
+    if (row) { row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' }); }
+  }
+}
+
+function setTab(tab, { quiet = false } = {}) {
+  if (!['trim', 'keys', 'removed'].includes(tab)) tab = 'trim';
+  state.tab = tab;
+  document.querySelectorAll('.tabs [data-tab]').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-selected', b.dataset.tab === tab); });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('on', p.dataset.panel === tab));
+  if (!quiet) try { localStorage.setItem('camelot.tab', tab); } catch (e) {}
+  if (tab === 'keys' && state.result) renderJourney(state.result.sorted_songs, state.result.transitions);
 }
 
 function renderWheel(songs) {
@@ -780,7 +919,8 @@ function renderWheel(songs) {
 
 function renderJourney(songs, transitions) {
   const el = $('journey');
-  const W = el.clientWidth || 290, H = 130, pad = 10;
+  if (!el.clientWidth) return;
+  const W = el.clientWidth, H = 130, pad = 10;
   el.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const useBpm = songs.filter(s => s.bpm > 0).length >= 2;
   const val = (s) => useBpm ? (s.bpm > 0 ? s.bpm : null) : (s.resolved_key ? s.resolved_key.number + (s.resolved_key.letter === 'B' ? 0.5 : 0) : null);
@@ -823,7 +963,7 @@ async function fetchPlan() {
   const budget = state.budget;
   const order = result.sorted_songs.map(s => s.id);
   const seq = ++state.planSeq;
-  $('trim-status').textContent = budget ? 'Finding the best cuts…' : '';
+  $('trim-status').classList.toggle('on', !!budget);
   try {
     const plan = await api('/api/removal_plan', {
       playlist_id: state.playlistId, strategy: state.strategy, exclude_ids: [...state.excluded],
@@ -834,7 +974,7 @@ async function fetchPlan() {
     state.plan = plan;
     renderPlan();
   } catch (e) {
-    if (seq === state.planSeq) { $('trim-status').textContent = ''; $('trim-body').innerHTML = `<div class="headline" style="color:var(--red)">${esc(e.message)}</div>`; }
+    if (seq === state.planSeq) { $('trim-status').classList.remove('on'); $('trim-body').innerHTML = `<div class="headline" style="color:var(--red)">${esc(e.message)}</div>`; }
   }
 }
 
@@ -853,7 +993,7 @@ function cmpCell(label, before, after, { fmt = (v) => v, lowerIsBetter = true, p
 
 function renderPlan() {
   const plan = state.plan;
-  $('trim-status').textContent = '';
+  $('trim-status').classList.remove('on');
   $('trim-body').classList.remove('stale');
   markSuggestedCuts();
   if (!plan) { $('trim-body').innerHTML = ''; return; }
@@ -892,6 +1032,7 @@ function renderPlan() {
 
 function markSuggestedCuts() {
   const ids = new Set(planFresh() ? state.plan.steps.map(s => s.song.id) : []);
+  $('tab-trim-count').textContent = ids.size || '';
   document.querySelectorAll('#tracks .row').forEach(r => {
     const on = ids.has(r.dataset.id);
     r.classList.toggle('flagged', on);
@@ -929,26 +1070,55 @@ function renderTray(excluded) {
     </div>`).join('') : '<div class="tray-empty">Removed songs land here. Drag a song here to remove it, or drag one back into the list.</div>';
 }
 
-/* ---------- Move-to popover ---------- */
+/* ---------- Song menu and popovers ---------- */
 
-function openMovePopover(id, anchor) {
-  const order = currentOrder(), idx = order.indexOf(id), n = order.length, song = songById(id);
-  const pop = $('popover');
-  pop.innerHTML = `<label>Move “${esc(song.title)}” to</label>
-    <div class="r"><input id="move-to" type="number" min="1" max="${n}" value="${idx + 1}"><button class="btn sm primary" id="move-go">Move</button></div>
-    <div class="q"><button class="btn sm" data-moveto="0">Top</button><button class="btn sm" data-moveto="${Math.floor((n - 1) / 2)}">Middle</button><button class="btn sm" data-moveto="${n - 1}">Bottom</button></div>
-    <div class="note">The song is locked there; songs above stay put and songs below re-sort.</div>`;
+function placePopover(pop, anchor) {
   pop.classList.remove('hidden');
   const r = anchor.getBoundingClientRect();
   const left = Math.min(window.innerWidth - pop.offsetWidth - 12, r.right - pop.offsetWidth);
   const top = r.bottom + 6 + pop.offsetHeight > window.innerHeight ? r.top - pop.offsetHeight - 6 : r.bottom + 6;
   pop.style.left = `${Math.max(12, left)}px`; pop.style.top = `${Math.max(12, top)}px`;
+}
+
+function openSongMenu(id, anchor) {
+  const order = currentOrder(), idx = order.indexOf(id), n = order.length, song = songById(id);
+  const locked = state.manual.has(id);
+  const pop = $('popover');
+  pop.className = 'popover';
+  pop.innerHTML = `<label>Move “${esc(song.title)}” to</label>
+    <div class="r"><input id="move-to" type="number" min="1" max="${n}" value="${idx + 1}" aria-label="Position"><button class="btn sm primary" id="move-go">Move</button></div>
+    <div class="q"><button class="btn sm" data-moveto="0">Top</button><button class="btn sm" data-moveto="${Math.floor((n - 1) / 2)}">Middle</button><button class="btn sm" data-moveto="${n - 1}">Bottom</button></div>
+    <div class="note">The song is locked there; songs above stay put and songs below re-sort.</div>
+    <div class="menu">
+      <button data-menu="pin">${icon('pin')}${locked ? 'Unlock (let sorting move it)' : 'Lock at #' + (idx + 1)}</button>
+      <button data-menu="remove" class="danger">${icon('x')}Remove from the set</button>
+    </div>`;
+  placePopover(pop, anchor);
   pop.dataset.id = id;
   const input = $('move-to'); input.focus(); input.select();
-  const go = (to) => { closePopover(); if (to !== idx || !state.manual.has(id)) moveSong(id, to); };
+  const go = (to) => { closePopover(); if (to !== idx || !locked) moveSong(id, to); };
   $('move-go').addEventListener('click', () => go(Math.max(0, Math.min(n - 1, (parseInt(input.value, 10) || 1) - 1))));
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('move-go').click(); });
   pop.querySelectorAll('[data-moveto]').forEach(b => b.addEventListener('click', () => go(parseInt(b.dataset.moveto, 10))));
+  pop.querySelector('[data-menu="pin"]').addEventListener('click', () => { closePopover(); locked ? unpin(id) : pinInPlace(id); });
+  pop.querySelector('[data-menu="remove"]').addEventListener('click', () => { closePopover(); removeSongs([id]); });
+}
+
+function openShortcuts(anchor) {
+  const pop = $('popover'), mod = isMac ? '⌘' : 'Ctrl+', alt = isMac ? '⌥' : 'Alt+';
+  pop.className = 'popover shortcuts';
+  pop.dataset.id = '';
+  pop.innerHTML = `<label>Keyboard shortcuts</label><table>
+    <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Select previous / next song</td></tr>
+    <tr><td><kbd>${alt}↑</kbd> <kbd>${alt}↓</kbd></td><td>Move the selected song up / down (locks it)</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Move to position, lock or remove</td></tr>
+    <tr><td><kbd>L</kbd></td><td>Lock / unlock the selected song</td></tr>
+    <tr><td><kbd>Delete</kbd></td><td>Remove the selected song</td></tr>
+    <tr><td><kbd>${mod}Z</kbd></td><td>Undo</td></tr>
+    <tr><td><kbd>${isMac ? '⇧⌘Z' : 'Ctrl+Y'}</kbd></td><td>Redo</td></tr>
+    <tr><td><kbd>/</kbd></td><td>Filter songs</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Close menus</td></tr></table>`;
+  placePopover(pop, anchor);
 }
 function closePopover() { $('popover').classList.add('hidden'); }
 
@@ -976,7 +1146,7 @@ $('tracks').addEventListener('dragstart', (e) => {
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('text/plain', row.dataset.id);
   closePopover();
-  setTimeout(() => row.classList.add('dragging'), 0);
+  setTimeout(() => { row.classList.add('dragging'); document.body.classList.add('dragging-row'); }, 0);
 });
 $('tray').addEventListener('dragstart', (e) => {
   const item = e.target.closest('[data-tray]');
@@ -990,6 +1160,8 @@ document.addEventListener('dragend', () => {
   document.querySelectorAll('.row.dragging').forEach(r => r.classList.remove('dragging'));
   const line = $('drop-line'); if (line) line.style.display = 'none';
   $('tray').classList.remove('over');
+  $('drop-remove').classList.remove('over');
+  document.body.classList.remove('dragging-row');
 });
 
 $('tracks').addEventListener('dragover', (e) => {
@@ -1019,6 +1191,16 @@ $('tracks').addEventListener('drop', (e) => {
   moveSong(d.id, to, { fromTray: d.from < 0 });
 });
 
+$('drop-remove').addEventListener('dragover', (e) => { if (state.drag && state.drag.from >= 0) { e.preventDefault(); $('drop-remove').classList.add('over'); } });
+$('drop-remove').addEventListener('dragleave', () => $('drop-remove').classList.remove('over'));
+$('drop-remove').addEventListener('drop', (e) => {
+  $('drop-remove').classList.remove('over');
+  document.body.classList.remove('dragging-row');
+  if (!state.drag || state.drag.from < 0) return;
+  e.preventDefault();
+  const id = state.drag.id; state.drag = null;
+  removeSongs([id]);
+});
 $('tray').addEventListener('dragover', (e) => { if (state.drag && state.drag.from >= 0) { e.preventDefault(); $('tray').classList.add('over'); } });
 $('tray').addEventListener('dragleave', (e) => { if (!$('tray').contains(e.relatedTarget)) $('tray').classList.remove('over'); });
 $('tray').addEventListener('drop', (e) => {
@@ -1054,14 +1236,17 @@ async function exportPlaylist() {
 document.addEventListener('click', (e) => {
   const pl = e.target.closest('[data-playlist]');
   if (pl) return openPlaylist(pl.dataset.playlist);
-  if (!e.target.closest('#popover') && !e.target.closest('[data-act="move"]')) closePopover();
+  if (!e.target.closest('#popover') && !e.target.closest('[data-act="menu"]') && !e.target.closest('#shortcuts')) closePopover();
+  const tab = e.target.closest('[data-tab]');
+  if (tab) return setTab(tab.dataset.tab);
+  if (e.target.closest('[data-dismiss]')) { state.dismissed.add(state.playlistId); show('unknown-notice', ''); return; }
   if (state.busy) return;
   const act = e.target.closest('[data-act]');
   if (act) {
     const id = act.closest('.row').dataset.id;
     if (act.dataset.act === 'remove') removeSongs([id]);
     else if (act.dataset.act === 'pin') state.manual.has(id) ? unpin(id) : pinInPlace(id);
-    else if (act.dataset.act === 'move') { if (!$('popover').classList.contains('hidden') && $('popover').dataset.id === id) closePopover(); else openMovePopover(id, act); }
+    else if (act.dataset.act === 'menu') { if (!$('popover').classList.contains('hidden') && $('popover').dataset.id === id) closePopover(); else openSongMenu(id, act); }
     return;
   }
   const rm = e.target.closest('[data-remove]'), rs = e.target.closest('[data-restore]'), keep = e.target.closest('[data-keep]');
@@ -1081,6 +1266,46 @@ document.addEventListener('keydown', (e) => {
   else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
   else if (e.key === '/' && state.result) { e.preventDefault(); $('filter').focus(); }
 });
+$('tracks').addEventListener('keydown', (e) => {
+  const row = e.target.closest('.row');
+  if (!row || e.target !== row || e.metaKey || e.ctrlKey) return;
+  const id = row.dataset.id, idx = +row.dataset.index;
+  const rows = [...$('tracks').querySelectorAll('.row')], pos = rows.indexOf(row);
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.altKey) {
+    e.preventDefault();
+    const to = idx + (e.key === 'ArrowDown' ? 1 : -1);
+    if (state.busy || to < 0 || to >= currentOrder().length) return;
+    state.focusId = id;
+    moveSong(id, to);
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const next = rows[pos + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (next) next.focus();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    if (state.busy) return;
+    const next = rows[pos + 1] || rows[pos - 1];
+    state.focusId = next ? next.dataset.id : null;
+    removeSongs([id]);
+  } else if (e.key.toLowerCase() === 'l') {
+    e.preventDefault();
+    if (state.busy) return;
+    state.focusId = id;
+    state.manual.has(id) ? unpin(id) : pinInPlace(id);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    openSongMenu(id, row.querySelector('.mv').offsetParent ? row.querySelector('.mv') : row.querySelector('.more'));
+  }
+});
+$('shortcuts').addEventListener('click', (e) => {
+  if (!$('popover').classList.contains('hidden') && $('popover').classList.contains('shortcuts')) closePopover(); else openShortcuts(e.currentTarget);
+});
+$('toggle-conn').addEventListener('click', () => {
+  state.showConn = !state.showConn;
+  try { localStorage.setItem('camelot.conn', state.showConn ? '1' : '0'); } catch (e) {}
+  $('toggle-conn').classList.toggle('on', state.showConn);
+  $('tracks').classList.toggle('compact', !state.showConn);
+});
 $('flow').addEventListener('click', (e) => { const b = e.target.closest('[data-flow]'); if (b) setFlow(b.dataset.flow); });
 $('resort').addEventListener('click', () => resort());
 $('clear-manual').addEventListener('click', () => resort({ clear: true }));
@@ -1099,6 +1324,8 @@ $('undo').title = isMac ? 'Undo (⌘Z)' : 'Undo (Ctrl+Z)';
 $('redo').title = isMac ? 'Redo (⇧⌘Z)' : 'Redo (Ctrl+Y)';
 
 $('budget').value = state.budget;
+$('toggle-conn').classList.toggle('on', state.showConn);
+setTab(state.tab, { quiet: true });
 loadStatus();
 loadPlaylists();
 updateControls();
