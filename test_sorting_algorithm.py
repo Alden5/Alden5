@@ -193,5 +193,52 @@ class TestManualOrdering(unittest.TestCase):
         self.assertEqual(result.sorted_songs[0].id, "7")
 
 
+class TestRemovalPlanner(unittest.TestCase):
+    def setUp(self):
+        self.sorter = HarmonicPlaylistSorter()
+
+    def core(self):
+        return [keyed(i, c, 124) for i, c in enumerate(["8A", "9A", "8B", "9B", "10A", "10B", "9A", "8A"])]
+
+    def test_removes_lone_outlier_first_and_reports_improvement(self):
+        songs = self.core() + [keyed(20, "2B", 124)]
+        plan = self.sorter.plan_removals(self.sorter.arrange_order(songs), 3)
+        self.assertEqual(plan.steps[0].song.id, "20")
+        self.assertGreater(plan.baseline.clashes, 0)
+        self.assertEqual(plan.after.clashes, 0)
+        self.assertLess(plan.after.friction, plan.baseline.friction)
+        self.assertIn("fixes the key clash", plan.headline())
+
+    def test_never_exceeds_budget_and_stops_when_nothing_helps(self):
+        plan = self.sorter.plan_removals(self.sorter.arrange_order(self.core()), 5)
+        self.assertEqual(plan.steps, [])
+        self.assertTrue(plan.stopped_early)
+        self.assertIn("Nothing worth removing", plan.headline())
+
+        songs = self.core() + [keyed(20, "2B", 124), keyed(21, "3A", 90), keyed(22, "4B", 160)]
+        plan = self.sorter.plan_removals(self.sorter.arrange_order(songs), 1)
+        self.assertLessEqual(len(plan.steps), 1)
+
+    def test_pair_of_outliers_removed_together_or_hinted(self):
+        songs = self.core() + [keyed(20, "2B", 124), keyed(21, "2B", 124)]
+        order = self.sorter.arrange_order(songs)
+        plan = self.sorter.plan_removals(order, 1)
+        self.assertEqual(plan.steps, [])
+        self.assertEqual(plan.hint_budget, 2)
+        self.assertIn("Allowing 2 removals", plan.hint)
+        plan = self.sorter.plan_removals(order, 3)
+        self.assertEqual({s.song.id for s in plan.steps}, {"20", "21"})
+        self.assertEqual(plan.after.clashes, 0)
+
+    def test_manual_songs_are_never_removed_and_keep_their_position(self):
+        songs = self.core() + [keyed(20, "2B", 124)]
+        order = self.sorter.arrange_order(songs, manual={"20": 3})
+        plan = self.sorter.plan_removals(order, 3, manual_ids=["20"])
+        removed = {s.song.id for s in plan.steps}
+        self.assertNotIn("20", removed)
+        pos = [s.id for s in plan.final_order].index("20")
+        self.assertTrue(3 - len(removed) <= pos <= 3)
+
+
 if __name__ == "__main__":
     unittest.main()

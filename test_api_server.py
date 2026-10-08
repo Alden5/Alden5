@@ -96,6 +96,29 @@ class TestServerAndApi(unittest.TestCase):
         self.assertIn(back, out)
         self.assertTrue(data["sorted_songs"][out.index(rest[0])]["manual"])
 
+    def test_removal_plan_respects_budget_and_applies_cleanly(self):
+        _, data = self.request("POST", "/api/analyze", {"playlist_id": self.friday["id"]})
+        order = [s["id"] for s in data["sorted_songs"]]
+        status, plan = self.request("POST", "/api/removal_plan", {
+            "playlist_id": self.friday["id"], "order": order, "max_remove": 1})
+        self.assertEqual(status, 200)
+        self.assertEqual(plan["steps"], [])
+        self.assertEqual(plan["hint_budget"], 2)
+
+        status, plan = self.request("POST", "/api/removal_plan", {
+            "playlist_id": self.friday["id"], "order": order, "max_remove": 3})
+        self.assertEqual(status, 200)
+        removed = [st["song"]["id"] for st in plan["steps"]]
+        self.assertTrue(1 <= len(removed) <= 3)
+        self.assertLess(plan["after"]["clashes"], plan["baseline"]["clashes"])
+        self.assertTrue(plan["headline"].startswith("Removing"))
+        self.assertEqual(len(plan["final_order_ids"]), len(order) - len(removed))
+
+        status, data = self.request("POST", "/api/analyze", {
+            "playlist_id": self.friday["id"], "exclude_ids": removed, "order": plan["final_order_ids"]})
+        self.assertEqual([s["id"] for s in data["sorted_songs"]], plan["final_order_ids"])
+        self.assertEqual(data["summary"]["rough_transitions"], plan["after"]["clashes"])
+
     def test_export_requires_analysis(self):
         status, data = self.request("POST", "/api/export", {"playlist_id": self.friday["id"], "ordered_ids": ["x"]})
         self.assertEqual(status, 400)

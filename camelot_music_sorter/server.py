@@ -138,6 +138,8 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/analyze":
                 self._analyze(payload)
+            elif self.path == "/api/removal_plan":
+                self._removal_plan(payload)
             elif self.path == "/api/export":
                 self._export(payload)
             else:
@@ -185,6 +187,37 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
         else:
             result = sorter.arrange(kept, keep_ids=payload.get("keep_ids") or (), manual=manual)
         self._send_json(serialize_result(playlist, result, excluded, set(manual)))
+
+    def _removal_plan(self, payload: Dict[str, Any]) -> None:
+        playlist = self._playlist(payload.get("playlist_id") or "")
+        songs = self.state.tracks.get(playlist["id"])
+        if songs is None:
+            return self._send_json({"error": "Analyze the playlist first."}, 400)
+        exclude = set(payload.get("exclude_ids") or [])
+        by_id = {s.id: s for s in songs if s.id not in exclude}
+        order = [by_id[i] for i in dict.fromkeys(payload.get("order") or []) if i in by_id]
+        placed = {s.id for s in order}
+        order += [s for s in songs if s.id in by_id and s.id not in placed]
+        try:
+            budget = max(0, min(50, int(payload.get("max_remove", 3))))
+        except (TypeError, ValueError):
+            return self._send_json({"error": "max_remove must be a number."}, 400)
+
+        sorter = HarmonicPlaylistSorter(energy_flow_preference=payload.get("strategy") or "gradual_build")
+        manual_ids = [i for i in _parse_manual(payload.get("manual")) if i in by_id]
+        plan = sorter.plan_removals(order, budget, manual_ids)
+        self._send_json({
+            "max_remove": plan.budget,
+            "headline": plan.headline(),
+            "hint": plan.hint,
+            "hint_budget": plan.hint_budget,
+            "stopped_early": plan.stopped_early,
+            "baseline": plan.baseline.to_dict(),
+            "after": plan.after.to_dict(),
+            "steps": [{"song": st.song.to_dict(), "reason": st.reason, "gain": round(st.gain, 2),
+                       "metrics": st.metrics.to_dict()} for st in plan.steps],
+            "final_order_ids": [s.id for s in plan.final_order],
+        })
 
     def _export(self, payload: Dict[str, Any]) -> None:
         playlist = self._playlist(payload.get("playlist_id") or "")
