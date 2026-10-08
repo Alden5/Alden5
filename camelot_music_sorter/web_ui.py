@@ -196,13 +196,33 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
   #journey { width: 100%; height: 130px; display: block; }
   .journey-cap { font-size: 11.5px; color: var(--faint); margin-top: 6px; line-height: 1.5; }
-  .sugg { padding: 11px 14px; border-top: 1px solid var(--border); }
-  .sugg:first-child { border-top: none; }
+  .budget { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--dim); padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .stepper { display: inline-flex; align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .stepper button { border: none; background: none; width: 30px; height: 32px; font-size: 16px; color: var(--dim); }
+  .stepper button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .stepper input { width: 40px; height: 32px; border: none; background: none; text-align: center; font-weight: 800; font-size: 15px; outline: none; -moz-appearance: textfield; }
+  .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .trim-body { padding: 12px 14px 14px; transition: opacity .2s; }
+  .trim-body.stale { opacity: .45; }
+  .headline { font-size: 13.5px; line-height: 1.5; font-weight: 600; }
+  .headline.good { color: #a7f3d0; }
+  .compare { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+  .cmp { background: var(--card); border: 1px solid var(--border); border-radius: 9px; padding: 8px 9px; }
+  .cmp .t { font-size: 10.5px; color: var(--dim); text-transform: uppercase; font-weight: 700; letter-spacing: .4px; }
+  .cmp .v { font-size: 15px; font-weight: 800; margin-top: 3px; white-space: nowrap; }
+  .cmp .v s { color: var(--faint); font-weight: 600; text-decoration: none; font-size: 13px; }
+  .cmp .d { font-size: 11px; font-weight: 700; margin-top: 2px; }
+  .cmp .d.up { color: var(--green); } .cmp .d.flat { color: var(--faint); }
+  .hint-box { font-size: 12.5px; line-height: 1.45; color: #cffafe; background: rgba(34,211,238,.07); border: 1px solid rgba(34,211,238,.28);
+              border-radius: 9px; padding: 8px 10px; margin: 10px 0; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+  .sugg { padding: 10px 0; border-top: 1px solid var(--border); }
   .sugg .who { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
-  .sugg .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .sugg .why { color: #b6c0d4; font-size: 12.5px; margin: 6px 0 3px; line-height: 1.45; }
-  .sugg .tip { color: var(--faint); font-size: 12px; line-height: 1.45; }
-  .sugg .btns { margin-top: 8px; display: flex; gap: 6px; }
+  .sugg .who .n { color: var(--faint); font-size: 12px; width: 14px; text-align: right; flex: none; }
+  .sugg .who .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .sugg .impact { font-size: 11.5px; color: var(--green); margin: 5px 0 0 22px; font-weight: 600; }
+  .sugg .why { color: #9aa6bd; font-size: 12px; margin: 4px 0 0 22px; line-height: 1.45; }
+  .sugg .btns { margin: 7px 0 0 22px; display: flex; gap: 6px; }
+  .trim-apply { width: 100%; justify-content: center; margin-top: 10px; height: 36px; }
   .tray { min-height: 54px; padding: 6px; transition: background .15s; border-radius: 0 0 var(--radius) var(--radius); }
   .tray.over { background: rgba(248,113,113,.08); box-shadow: inset 0 0 0 2px rgba(248,113,113,.4); }
   .tray-empty { color: var(--faint); font-size: 12.5px; text-align: center; padding: 14px 8px; line-height: 1.5; }
@@ -347,9 +367,14 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
               <div class="card-head"><h3>Set journey</h3><span class="hint" id="journey-hint"></span></div>
               <div class="panel-body"><svg id="journey" preserveAspectRatio="none"></svg><div class="journey-cap" id="journey-cap"></div></div>
             </div>
-            <div id="sugg-card" class="card hidden">
-              <div class="card-head"><h3 style="color:var(--red)">Suggested removals</h3><button id="remove-all" class="btn sm">Remove all</button></div>
-              <div id="sugg-list"></div>
+            <div id="trim-card" class="card">
+              <div class="card-head"><h3>Trim the set</h3><span class="hint" id="trim-status"></span></div>
+              <div class="budget">
+                <span>I'm willing to remove up to</span>
+                <div class="stepper"><button id="budget-dec" aria-label="Fewer">−</button><input id="budget" type="number" min="0" max="20" value="3" aria-label="Maximum songs to remove"><button id="budget-inc" aria-label="More">+</button></div>
+                <span>songs</span>
+              </div>
+              <div id="trim-body" class="trim-body"></div>
             </div>
             <div class="card">
               <div class="card-head"><h3>Removed</h3><button id="restore-all" class="btn sm hidden">Restore all</button></div>
@@ -381,7 +406,9 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const state = {
   playlists: [], playlistId: null, result: null, strategy: 'gradual_build',
   excluded: new Set(), manual: new Set(), busy: false, undo: [], redo: [], drag: null,
+  budget: 3, plan: null, planSeq: 0,
 };
+try { const b = parseInt(localStorage.getItem('camelot.budget'), 10); if (b >= 0 && b <= 20) state.budget = b; } catch (e) {}
 
 function pill(k) {
   if (!k) return '<span class="pill none" title="Key unknown">?</span>';
@@ -671,7 +698,7 @@ function render({ prevOrder = [], placed } = {}) {
   renderTracks({ prevOrder, placed });
   renderWheel(songs);
   renderJourney(songs, data.transitions);
-  renderSuggestions(data.suggestions);
+  schedulePlan();
   renderTray(data.excluded_songs);
 
   $('export-what').innerHTML = `Creates <strong>“${esc(data.new_playlist_name)}”</strong> in Apple Music · ${songs.length} songs, top to bottom`;
@@ -681,7 +708,7 @@ function render({ prevOrder = [], placed } = {}) {
 function renderTracks({ prevOrder = [], placed } = {}) {
   const data = state.result, songs = data.sorted_songs;
   const q = $('filter').value.trim().toLowerCase();
-  const flagged = new Set(data.suggestions.map(x => x.song.id));
+  const flagged = new Set(planFresh() ? state.plan.steps.map(x => x.song.id) : []);
   const prevIndex = new Map(prevOrder.map((id, i) => [id, i]));
   const SRC = { metadata: 'Comments', file_tag: 'File tag', audio_analysis: 'Audio', unknown: 'No key' };
   const parts = [];
@@ -704,7 +731,7 @@ function renderTracks({ prevOrder = [], placed } = {}) {
       <div class="song"><div class="title">${esc(song.title)}</div><div class="artist">${esc(song.artist)}${song.album ? ' · ' + esc(song.album) : ''}</div></div>
       <div class="tags">
         ${song.manual ? `<span class="tag manual" title="You placed this song. Sorting keeps it here.">${icon('pin')}Manual</span>` : ''}
-        ${flagged.has(song.id) ? '<span class="tag flag" title="See Suggested removals">Doesn\u2019t fit</span>' : ''}
+        <span class="tag flag${flagged.has(song.id) ? '' : ' hidden'}" title="Suggested cut. See Trim the set">Suggested cut</span>
         <span class="tag src" title="${esc(song.key_note || 'Where the key came from')}">${esc(src)}</span>
       </div>
       <span class="bpm">${song.bpm > 0 ? Math.round(song.bpm) : '—'}</span>
@@ -781,15 +808,116 @@ function renderJourney(songs, transitions) {
   $('journey-cap').innerHTML = `${useBpm ? 'Tempo' : 'Wheel position'} from first to last song. Dots are colored by key; <span style="color:var(--red)">dashed red</span> lines are key clashes.`;
 }
 
-function renderSuggestions(suggestions) {
-  $('sugg-card').classList.toggle('hidden', !suggestions.length);
-  $('sugg-list').innerHTML = suggestions.map(x => `
-    <div class="sugg">
-      <div class="who">${pill(x.song.resolved_key)}<span>${esc(x.song.title)} <span style="color:var(--dim);font-weight:400">· ${esc(x.song.artist)}</span></span></div>
-      <div class="why">${esc(x.reason)}</div>
-      <div class="tip">${esc(x.alternative_suggestion)}</div>
-      <div class="btns"><button class="btn sm" data-remove="${esc(x.song.id)}">Remove</button><button class="btn sm" data-keep="${esc(x.song.id)}" title="Lock it where it is">Keep it</button></div>
-    </div>`).join('');
+/* ---------- Trim the set (removal budget) ---------- */
+
+let planTimer = null;
+function schedulePlan(delay = 250) {
+  clearTimeout(planTimer);
+  if (state.plan && state.plan.forResult !== state.result) $('trim-body').classList.add('stale');
+  planTimer = setTimeout(fetchPlan, delay);
+}
+
+async function fetchPlan() {
+  const result = state.result;
+  if (!result) return;
+  const budget = state.budget;
+  const order = result.sorted_songs.map(s => s.id);
+  const seq = ++state.planSeq;
+  $('trim-status').textContent = budget ? 'Finding the best cuts…' : '';
+  try {
+    const plan = await api('/api/removal_plan', {
+      playlist_id: state.playlistId, strategy: state.strategy, exclude_ids: [...state.excluded],
+      order, manual: pinsFor(order), max_remove: budget,
+    });
+    if (seq !== state.planSeq || result !== state.result) return;
+    plan.forResult = result;
+    state.plan = plan;
+    renderPlan();
+  } catch (e) {
+    if (seq === state.planSeq) { $('trim-status').textContent = ''; $('trim-body').innerHTML = `<div class="headline" style="color:var(--red)">${esc(e.message)}</div>`; }
+  }
+}
+
+function planFresh() { return state.plan && state.plan.forResult === state.result; }
+
+function cmpCell(label, before, after, { fmt = (v) => v, lowerIsBetter = true, pct = false } = {}) {
+  const diff = after - before;
+  const better = lowerIsBetter ? diff < 0 : diff > 0;
+  let d = 'no change', cls = 'flat';
+  if (Math.abs(diff) > 1e-9) {
+    cls = better ? 'up' : 'flat';
+    d = pct && before ? `${diff < 0 ? '−' : '+'}${Math.round(100 * Math.abs(diff) / before)}%` : `${diff < 0 ? '−' : '+'}${fmt(Math.abs(diff))}`;
+  }
+  return `<div class="cmp"><div class="t">${label}</div><div class="v"><s>${fmt(before)}</s> → ${fmt(after)}</div><div class="d ${cls}">${d}</div></div>`;
+}
+
+function renderPlan() {
+  const plan = state.plan;
+  $('trim-status').textContent = '';
+  $('trim-body').classList.remove('stale');
+  markSuggestedCuts();
+  if (!plan) { $('trim-body').innerHTML = ''; return; }
+  const b = plan.baseline, a = plan.after, n = plan.steps.length;
+  const smoothPct = (m) => m.scored ? Math.round(100 * m.smooth / m.scored) : 100;
+  let html = `<div class="headline${n ? ' good' : ''}">${esc(plan.headline)}</div>`;
+  if (n) {
+    html += '<div class="compare">' +
+      cmpCell('Key clashes', b.clashes, a.clashes) +
+      cmpCell('Smooth mixes', smoothPct(b), smoothPct(a), { fmt: (v) => `${Math.round(v)}%`, lowerIsBetter: false }) +
+      cmpCell('Friction', b.friction, a.friction, { fmt: (v) => (+v).toFixed(1), pct: true }) + '</div>';
+  }
+  if (plan.hint) {
+    const want = Math.min(20, plan.hint_budget || 0);
+    html += `<div class="hint-box"><span>${esc(plan.hint)}</span>${want > state.budget ? `<button class="btn sm" data-budget="${want}">Allow ${want}</button>` : ''}</div>`;
+  }
+  let prev = b;
+  html += plan.steps.map((st, i) => {
+    const m = st.metrics, bits = [];
+    if (m.clashes < prev.clashes) bits.push(`fixes ${prev.clashes - m.clashes} clash${prev.clashes - m.clashes > 1 ? 'es' : ''}`);
+    if (m.friction < prev.friction) bits.push(`friction −${(prev.friction - m.friction).toFixed(1)}`);
+    const sameAsNext = plan.steps[i + 1] && plan.steps[i + 1].metrics.objective === m.objective;
+    if (!sameAsNext) prev = m;
+    const impact = sameAsNext ? 'removed together with the next song' : (bits.length ? bits.join(' · ') : 'smoother flow');
+    return `<div class="sugg">
+      <div class="who"><span class="n">${i + 1}</span>${pill(st.song.resolved_key)}<span class="name">${esc(st.song.title)} <span style="color:var(--dim);font-weight:400">· ${esc(st.song.artist)}</span></span></div>
+      <div class="impact">${esc(impact)}</div>
+      <div class="why">${esc(st.reason)}</div>
+      <div class="btns"><button class="btn sm" data-remove="${esc(st.song.id)}">Remove</button><button class="btn sm" data-keep="${esc(st.song.id)}" title="Lock it where it is so it's never suggested">Keep it</button></div>
+    </div>`;
+  }).join('');
+  if (n) html += `<button id="trim-apply" class="btn primary trim-apply">Remove ${n === 1 ? 'this song' : `these ${n} songs`}</button>`;
+  $('trim-body').innerHTML = html;
+  if (state.busy) $('trim-body').querySelectorAll('button').forEach(x => { x.disabled = true; });
+}
+
+function markSuggestedCuts() {
+  const ids = new Set(planFresh() ? state.plan.steps.map(s => s.song.id) : []);
+  document.querySelectorAll('#tracks .row').forEach(r => {
+    const on = ids.has(r.dataset.id);
+    r.classList.toggle('flagged', on);
+    r.querySelector('.tag.flag').classList.toggle('hidden', !on);
+  });
+}
+
+function applyPlan() {
+  if (!planFresh() || !state.plan.steps.length) return;
+  const plan = state.plan, ids = plan.steps.map(s => s.song.id);
+  const finalOrder = plan.final_order_ids;
+  const b = plan.baseline, a = plan.after;
+  const effect = b.clashes !== a.clashes ? `clashes ${b.clashes} → ${a.clashes}` : `friction ${b.friction.toFixed(1)} → ${a.friction.toFixed(1)}`;
+  run({ order: finalOrder, manual: pinsFor(finalOrder) }, {
+    mutate: () => ids.forEach(id => { state.excluded.add(id); state.manual.delete(id); }),
+    message: `Removed ${ids.length} song${ids.length > 1 ? 's' : ''} · ${effect}`,
+  });
+}
+
+function setBudget(v) {
+  v = Math.max(0, Math.min(20, parseInt(v, 10) || 0));
+  if (v === state.budget && $('budget').value == v) return;
+  state.budget = v;
+  $('budget').value = v;
+  try { localStorage.setItem('camelot.budget', String(v)); } catch (e) {}
+  if (state.result) schedulePlan(350);
 }
 
 function renderTray(excluded) {
@@ -940,6 +1068,9 @@ document.addEventListener('click', (e) => {
   if (rm) removeSongs([rm.dataset.remove]);
   if (rs) restoreSongs([rs.dataset.restore]);
   if (keep) pinInPlace(keep.dataset.keep);
+  const budgetBtn = e.target.closest('[data-budget]');
+  if (budgetBtn) setBudget(budgetBtn.dataset.budget);
+  if (e.target.closest('#trim-apply')) applyPlan();
 });
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
@@ -955,7 +1086,9 @@ $('resort').addEventListener('click', () => resort());
 $('clear-manual').addEventListener('click', () => resort({ clear: true }));
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-$('remove-all').addEventListener('click', () => { if (state.result) removeSongs(state.result.suggestions.map(x => x.song.id)); });
+$('budget').addEventListener('input', () => setBudget($('budget').value));
+$('budget-dec').addEventListener('click', () => setBudget(state.budget - 1));
+$('budget-inc').addEventListener('click', () => setBudget(state.budget + 1));
 $('restore-all').addEventListener('click', () => { if (state.result) restoreSongs(state.result.excluded_songs.map(x => x.id)); });
 $('export').addEventListener('click', exportPlaylist);
 $('filter').addEventListener('input', () => { if (state.result) renderTracks({}); });
@@ -965,6 +1098,7 @@ window.addEventListener('resize', () => { if (state.result) renderJourney(state.
 $('undo').title = isMac ? 'Undo (⌘Z)' : 'Undo (Ctrl+Z)';
 $('redo').title = isMac ? 'Redo (⇧⌘Z)' : 'Redo (Ctrl+Y)';
 
+$('budget').value = state.budget;
 loadStatus();
 loadPlaylists();
 updateControls();
