@@ -1,178 +1,154 @@
 """
-Audio key detection using Chromagram Analysis & Krumhansl-Schmuckler Pitch Class Profiles.
-Supports any audio format decodable by ffmpeg (e.g. m4a, mp3, aac, wav, aiff, flac).
+Audio key detection: chromagram analysis + Krumhansl-Kessler key profiles.
+Supports any audio format ffmpeg can decode (m4a/aac, mp3, wav, aiff, flac).
+DRM-protected Apple Music downloads (.m4p) cannot be decoded and return None.
 """
 
 from __future__ import annotations
+import json
 import os
+import shutil
 import subprocess
-import tempfile
-import struct
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple
+
 import numpy as np
 
 from .camelot import MusicalKey
 
-# Krumhansl-Kessler / Temperley / Albrecht key profiles
-# Krumhansl-Kessler key profiles (standard perceptual weights for 12 pitch classes relative to tonic)
-# Pitch classes: [tonic, +1, +2, +3, +4, +5, +6, +7, +8, +9, +10, +11]
 KK_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 KK_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
-# Temperley Key Profiles (often performs better with modern music)
-TEMPERLEY_MAJOR = np.array([5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0])
-TEMPERLEY_MINOR = np.array([5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0])
+SAMPLE_RATE = 22050
+N_FFT = 8192
+HOP = 4096
+MIN_FREQ = 65.4    # C2
+MAX_FREQ = 2093.0  # C7
+
+KEY_TAG_NAMES = ("initialkey", "tkey", "key", "initial_key")
 
 
-def compute_chroma_from_pcm(samples: np.ndarray, sample_rate: int = 22050) -> np.ndarray:
-    """
-    Computes a 12-dimensional chroma vector from mono floating point audio samples.
-    Uses Short-Time Fourier Transform (STFT) with pitch class binning.
-    """
+def ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
+def _pitch_class_matrix(n_fft: int, sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
+    bins = np.where((freqs >= MIN_FREQ) & (freqs <= MAX_FREQ))[0]
+    midi = 69.0 + 12.0 * np.log2(freqs[bins] / 440.0)
+    pcs = np.mod(np.round(midi).astype(int), 12)
+    matrix = np.zeros((len(bins), 12))
+    matrix[np.arange(len(bins)), pcs] = 1.0
+    return bins, matrix
+
+
+def compute_chroma_from_pcm(samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Return a normalized 12-bin chroma vector (C = index 0) for mono samples."""
     if len(samples) == 0:
         return np.ones(12) / 12.0
 
-    # Resample or chunk into frames
-    n_fft = 4096
-    hop_length = 2048
-    window = np.hanning(n_fft)
+    n_fft = N_FFT if len(samples) >= N_FFT else 1 << max(8, int(np.log2(len(samples))))
+    hop = n_fft // 2
+    if len(samples) < n_fft:
+        samples = np.pad(samples, (0, n_fft - len(samples)))
 
-    n_frames = max(1, (len(samples) - n_fft) // hop_length)
-    if n_frames < 1:
-        # Pad with zeros
-        padded = np.pad(samples, (0, n_fft - len(samples)))
-        frames = [padded]
-    else:
-        frames = [
-            samples[i * hop_length : i * hop_length + n_fft] * window
-            for i in range(n_frames)
-        ]
+    n_frames = 1 + (len(samples) - n_fft) // hop
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+    frames = samples[idx] * np.hanning(n_fft)
 
-    # Compute FFT magnitudes
-    chroma = np.zeros(12, dtype=np.float64)
-    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
-
-    # Focus on the most pitch-relevant frequency range (approx 65 Hz to 2100 Hz: C2 to C7)
-    min_freq = 65.4   # C2
-    max_freq = 2093.0 # C7
-
-    valid_bins = np.where((freqs >= min_freq) & (freqs <= max_freq))[0]
-    if len(valid_bins) == 0:
+    bins, matrix = _pitch_class_matrix(n_fft, sample_rate)
+    if len(bins) == 0:
         return np.ones(12) / 12.0
 
-    valid_freqs = freqs[valid_bins]
-    # MIDI note number: 69 + 12 * log2(f / 440.0)
-    midi_notes = 69.0 + 12.0 * np.log2(valid_freqs / 440.0)
-    # Pitch class 0..11 where C = 0 (MIDI 60 is C4 -> 60 % 12 = 0)
-    pitch_classes = np.mod(np.round(midi_notes).astype(int), 12)
+    mags = np.abs(np.fft.rfft(frames, axis=1))[:, bins]
+    # Per-frame normalization keeps loud sections from dominating the profile.
+    frame_energy = mags.sum(axis=1, keepdims=True)
+    mags = np.divide(mags, frame_energy, out=np.zeros_like(mags), where=frame_energy > 0)
+    chroma = (mags @ matrix).sum(axis=0)
 
-    for frame in frames:
-        fft_mag = np.abs(np.fft.rfft(frame))
-        valid_mags = fft_mag[valid_bins]
-        for pc in range(12):
-            chroma[pc] += np.sum(valid_mags[pitch_classes == pc])
+    total = chroma.sum()
+    return chroma / total if total > 0 else np.ones(12) / 12.0
 
-    # Normalize chroma vector
-    total = np.sum(chroma)
-    if total > 0:
-        chroma = chroma / total
-    else:
-        chroma = np.ones(12) / 12.0
 
-    return chroma
+def _standardize(v: np.ndarray) -> np.ndarray:
+    return (v - v.mean()) / v.std()
 
 
 def estimate_key_from_chroma(chroma: np.ndarray) -> Tuple[MusicalKey, float]:
     """
-    Correlates a 12-dimensional chroma vector with major and minor profiles.
-    Returns the best matching MusicalKey and the confidence score (Pearson r).
+    Correlate chroma with all 24 rotated key profiles.
+    Confidence reflects how clearly the best key beats the runner-up
+    that is not its relative major/minor.
     """
-    # Normalize chroma
-    chroma_norm = chroma - np.mean(chroma)
-    std_c = np.std(chroma)
-    if std_c > 1e-9:
-        chroma_norm = chroma_norm / std_c
-    else:
-        # Uniform pitch energy, default to 8B (C Major) with 0 confidence
+    if np.std(chroma) < 1e-9:
         return MusicalKey.from_camelot("8B"), 0.0
 
-    best_corr = -2.0
-    best_key = MusicalKey.from_camelot("8B")
-
-    # Standardized profiles
-    def norm_profile(p: np.ndarray) -> np.ndarray:
-        p_norm = p - np.mean(p)
-        return p_norm / np.std(p_norm)
-
-    maj_prof = norm_profile(KK_MAJOR)
-    min_prof = norm_profile(KK_MINOR)
-
+    c = _standardize(chroma)
+    maj, mnr = _standardize(KK_MAJOR), _standardize(KK_MINOR)
+    scores = []
     for tonic in range(12):
-        # Rotate profiles so that index 0 aligns with tonic
-        rotated_maj = np.roll(maj_prof, tonic)
-        rotated_min = np.roll(min_prof, tonic)
+        scores.append((float(np.dot(c, np.roll(maj, tonic)) / 12.0), MusicalKey.from_pitch_mode(tonic, "major")))
+        scores.append((float(np.dot(c, np.roll(mnr, tonic)) / 12.0), MusicalKey.from_pitch_mode(tonic, "minor")))
+    scores.sort(key=lambda s: s[0], reverse=True)
 
-        corr_maj = float(np.dot(chroma_norm, rotated_maj) / 12.0)
-        corr_min = float(np.dot(chroma_norm, rotated_min) / 12.0)
-
-        if corr_maj > best_corr:
-            best_corr = corr_maj
-            best_key = MusicalKey.from_pitch_mode(tonic, 'major')
-
-        if corr_min > best_corr:
-            best_corr = corr_min
-            best_key = MusicalKey.from_pitch_mode(tonic, 'minor')
-
-    confidence = max(0.0, min(1.0, (best_corr + 1.0) / 2.0))
+    best_r, best_key = scores[0]
+    rival_r = next((r for r, k in scores[1:] if k.number != best_key.number), best_r)
+    margin = max(0.0, best_r - rival_r)
+    confidence = float(np.clip(0.4 * max(best_r, 0.0) + 2.5 * margin, 0.0, 1.0))
     return best_key, confidence
 
 
-def extract_pcm_from_file(file_path: str, duration_sec: int = 60, offset_sec: int = 30) -> Optional[Tuple[np.ndarray, int]]:
-    """
-    Uses ffmpeg to decode a slice of an audio file to raw 16-bit mono PCM.
-    Returns (samples_array, sample_rate) or None on failure.
-    """
-    if not os.path.exists(file_path):
+def extract_pcm_from_file(file_path: str, duration_sec: int = 120, offset_sec: int = 20) -> Optional[Tuple[np.ndarray, int]]:
+    """Decode a slice of an audio file to mono float PCM via ffmpeg."""
+    if not os.path.exists(file_path) or not ffmpeg_available():
         return None
 
-    sample_rate = 22050
-    cmd = [
-        'ffmpeg',
-        '-v', 'error',
-        '-ss', str(offset_sec),
-        '-t', str(duration_sec),
-        '-i', file_path,
-        '-f', 's16le',
-        '-acodec', 'pcm_s16le',
-        '-ac', '1',
-        '-ar', str(sample_rate),
-        '-'
-    ]
+    def decode(offset: int) -> bytes:
+        cmd = [
+            "ffmpeg", "-v", "error", "-nostdin",
+            "-ss", str(offset), "-t", str(duration_sec),
+            "-i", file_path,
+            "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-",
+        ]
+        try:
+            return subprocess.run(cmd, capture_output=True, timeout=60).stdout
+        except (subprocess.TimeoutExpired, OSError):
+            return b""
 
+    raw = decode(offset_sec)
+    if len(raw) < SAMPLE_RATE * 2 * 5:
+        # Track is shorter than the offset plus a few seconds; analyze from the start.
+        raw = decode(0)
+    if len(raw) < 2048:
+        return None
+
+    samples = np.frombuffer(raw[: len(raw) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
+    return samples, SAMPLE_RATE
+
+
+def read_key_tag_from_file(file_path: str) -> Optional[str]:
+    """Read a key tag (ID3 TKEY, iTunes 'initialkey', etc.) written by DJ software."""
+    if not os.path.exists(file_path) or shutil.which("ffprobe") is None:
+        return None
+    cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_entries", "format_tags:stream_tags", file_path]
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-        raw_bytes = proc.stdout
-        if not raw_bytes or len(raw_bytes) < 1000:
-            # Maybe the track is shorter than offset_sec, try from the start
-            cmd[3] = '0'
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-            raw_bytes = proc.stdout
-
-        if not raw_bytes:
-            return None
-
-        # Convert to numpy array
-        samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        return samples, sample_rate
-    except Exception:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15).stdout
+        data = json.loads(out or "{}")
+    except (subprocess.TimeoutExpired, OSError, ValueError):
         return None
+
+    tag_sets = [data.get("format", {}).get("tags", {})]
+    tag_sets += [s.get("tags", {}) for s in data.get("streams", [])]
+    for tags in tag_sets:
+        for name, value in tags.items():
+            if name.lower() in KEY_TAG_NAMES and str(value).strip():
+                return str(value).strip()
+    return None
 
 
 def detect_key_from_audio_file(file_path: str) -> Optional[Tuple[MusicalKey, float]]:
-    """Detect key directly from audio file on disk via ffmpeg + chromagram analysis."""
+    """Detect key directly from an audio file on disk."""
     result = extract_pcm_from_file(file_path)
     if result is None:
         return None
     samples, sample_rate = result
-    chroma = compute_chroma_from_pcm(samples, sample_rate)
-    return estimate_key_from_chroma(chroma)
+    return estimate_key_from_chroma(compute_chroma_from_pcm(samples, sample_rate))

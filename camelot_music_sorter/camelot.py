@@ -150,44 +150,59 @@ class MusicalKey:
         return cls(number=number, letter=letter, pitch_class=pitch_class, mode=mode_str)
 
     @classmethod
+    def from_open_key(cls, code: str) -> MusicalKey:
+        """Parse Traktor Open Key notation ('1m' = A minor, '1d' = C major)."""
+        match = re.match(r'^0*([1-9]|1[0-2])([dm])$', code.strip().lower())
+        if not match:
+            raise ValueError(f"Invalid Open Key code: {code}")
+        number = (int(match.group(1)) + 6) % 12 + 1
+        return cls.from_camelot(f"{number}{'A' if match.group(2) == 'm' else 'B'}")
+
+    @classmethod
     def parse(cls, text: str) -> Optional[MusicalKey]:
-        """Flexible parser that handles Camelot codes ('8A', '4B') and standard keys ('C maj', 'F#m', 'Ab minor', 'Bb')."""
+        """
+        Parse a whole field that contains only a key: Camelot ('8A', '08a', '8 A'),
+        Open Key ('1m', '6d') or a key name ('C', 'F#m', 'Ab minor', 'Bb maj').
+        """
         if not text:
             return None
-        raw = text.strip()
+        raw = text.strip().replace('♯', '#').replace('♭', 'b')
 
-        # Try camelot first
-        try:
-            return cls.from_camelot(raw)
-        except ValueError:
-            pass
+        for parser in (cls.from_camelot, cls.from_open_key):
+            try:
+                return parser(raw.replace(' ', ''))
+            except ValueError:
+                pass
 
-        # Try parsing key names like:
-        # C#m, C# min, C# minor, Db Major, F#m, Ab, A minor, B
-        pattern = r'^([A-Ga-g][#b]?)\s*(maj(?:or)?|min(?:or)?|m)?$'
-        match = re.match(pattern, raw, re.IGNORECASE)
+        match = re.match(r'^([A-Ga-g])([#b]?)\s*(maj(?:or)?|min(?:or)?|m)?$', raw, re.IGNORECASE)
         if not match:
             return None
-
-        note_part = match.group(1).upper()
-        # Canonicalize note format (e.g., 'BB' -> 'Bb', 'C#' -> 'C#')
-        if len(note_part) == 2:
-            note_part = note_part[0] + note_part[1].lower()
-            if note_part[1] == 'b':
-                note_part = note_part[0] + 'b'
-        
-        lookup_note = note_part.upper()
-        if lookup_note not in NOTE_TO_SEMITONE:
-            return None
-        pitch = NOTE_TO_SEMITONE[lookup_note]
-
-        mode_part = (match.group(2) or '').lower()
-        if mode_part.startswith('min') or mode_part == 'm':
-            mode = 'minor'
-        else:
-            mode = 'major'
-
+        pitch = NOTE_TO_SEMITONE[(match.group(1) + match.group(2)).upper()]
+        mode_part = (match.group(3) or '').lower()
+        mode = 'minor' if mode_part.startswith('min') or mode_part == 'm' else 'major'
         return cls.from_pitch_mode(pitch, mode)
+
+
+_CAMELOT_IN_TEXT = re.compile(r'(?<![\w#.])0?([1-9]|1[0-2])([AB])(?![\w#])')
+# Note letter must be uppercase and a mode is required, so ordinary words
+# ("a great song", "Bass") are never mistaken for keys.
+_KEYNAME_IN_TEXT = re.compile(r'(?<![\w#])([A-G])([#b♯♭]?)\s?(major|minor|maj|min|m)(?![\w#])')
+
+
+def extract_key(text: Optional[str]) -> Optional[MusicalKey]:
+    """Find a key inside free text such as a comment ('8A - Energy 6', 'Key: F# minor')."""
+    if not text:
+        return None
+    whole = MusicalKey.parse(text)
+    if whole:
+        return whole
+    match = _CAMELOT_IN_TEXT.search(text)
+    if match:
+        return MusicalKey.from_camelot(match.group(1) + match.group(2))
+    match = _KEYNAME_IN_TEXT.search(text)
+    if match:
+        return MusicalKey.parse(''.join(match.groups()))
+    return None
 
 
 # Transition evaluation and scoring

@@ -1,225 +1,325 @@
 """
-Apple Music (Music.app) integration for macOS via AppleScript / osascript.
-Also provides a Mock / Fallback adapter for testing and environments where Music.app is unavailable.
+Apple Music (Music.app) integration for macOS via AppleScript.
+
+Scripts are fed to `osascript -` on stdin and receive user data (playlist
+names, track IDs) through `argv`, so no value is ever interpolated into
+script source.
+
+On other platforms, or with demo=True, an in-memory demo library is used.
 """
 
 from __future__ import annotations
-import os
-import sys
 import subprocess
-import json
-from typing import List, Optional, Dict, Any
+import sys
+from typing import Any, Dict, List, Optional
 
 from .song_model import Song
-from .camelot import MusicalKey
+
+FIELD_SEP = "\x1f"
+RECORD_SEP = "\x1e"
+APP_MARKER = "Created by Camelot DJ Sorter"
+
+
+class MusicAppError(RuntimeError):
+    pass
+
+
+_HELPERS = """
+on fmt(v)
+    if v is missing value then return ""
+    try
+        return v as text
+    on error
+        return ""
+    end try
+end fmt
+"""
+
+LIST_PLAYLISTS_SCRIPT = _HELPERS + """
+on run argv
+    set sep to character id 31
+    set out to {}
+    tell application "Music"
+        repeat with pRef in (every user playlist)
+            set p to contents of pRef
+            try
+                if special kind of p is none then
+                    set end of out to my fmt(name of p) & sep & my fmt(persistent ID of p) & sep & my fmt(count of tracks of p) & sep & my fmt(smart of p)
+                end if
+            end try
+        end repeat
+    end tell
+    set AppleScript's text item delimiters to (character id 30)
+    return out as text
+end run
+"""
+
+GET_TRACKS_SCRIPT = _HELPERS + """
+on run argv
+    set pid to item 1 of argv
+    set sep to character id 31
+    set out to {}
+    tell application "Music"
+        with timeout of 900 seconds
+            set pl to (first user playlist whose persistent ID is pid)
+            set trks to every track of pl
+            repeat with tRef in trks
+                set t to contents of tRef
+                set loc to ""
+                try
+                    if class of t is file track then
+                        set l to location of t
+                        if l is not missing value then set loc to POSIX path of l
+                    end if
+                end try
+                set end of out to my fmt(persistent ID of t) & sep & my fmt(name of t) & sep & my fmt(artist of t) & sep & my fmt(album of t) & sep & my fmt(duration of t) & sep & my fmt(bpm of t) & sep & my fmt(comment of t) & sep & my fmt(grouping of t) & sep & my fmt(genre of t) & sep & loc
+            end repeat
+        end timeout
+    end tell
+    set AppleScript's text item delimiters to (character id 30)
+    return out as text
+end run
+"""
+
+CREATE_PLAYLIST_SCRIPT = _HELPERS + """
+on run argv
+    set srcId to item 1 of argv
+    set baseName to item 2 of argv
+    set marker to item 3 of argv
+    if (count of argv) > 3 then
+        set trackIds to items 4 thru -1 of argv
+    else
+        set trackIds to {}
+    end if
+    set sep to character id 31
+    tell application "Music"
+        with timeout of 900 seconds
+            set src to (first user playlist whose persistent ID is srcId)
+            set newName to baseName
+            set replaced to false
+            set n to 1
+            repeat
+                set clash to (every user playlist whose name is newName)
+                if (count of clash) is 0 then exit repeat
+                set ours to true
+                repeat with pRef in clash
+                    set d to ""
+                    try
+                        set d to my fmt(description of (contents of pRef))
+                    end try
+                    if d does not contain marker then set ours to false
+                end repeat
+                if ours then
+                    repeat with pRef in clash
+                        delete (contents of pRef)
+                    end repeat
+                    set replaced to true
+                    exit repeat
+                end if
+                set n to n + 1
+                set newName to baseName & " (" & n & ")"
+            end repeat
+
+            set newPl to make new user playlist with properties {name:newName}
+            try
+                set description of newPl to marker
+            end try
+            set added to 0
+            repeat with tid in trackIds
+                try
+                    set t to (first track of src whose persistent ID is (tid as text))
+                    duplicate t to newPl
+                    set added to added + 1
+                end try
+            end repeat
+            return newName & sep & (added as text) & sep & (replaced as text)
+        end timeout
+    end tell
+end run
+"""
+
+
+def _to_float(value: str) -> float:
+    try:
+        return float(value.strip().replace(",", "."))
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _split_records(raw: str) -> List[List[str]]:
+    raw = raw.rstrip("\n")
+    if not raw:
+        return []
+    return [rec.split(FIELD_SEP) for rec in raw.split(RECORD_SEP) if rec.strip()]
+
+
+def _dedupe_ids(songs: List[Song]) -> List[Song]:
+    seen: Dict[str, int] = {}
+    for s in songs:
+        count = seen.get(s.persistent_id, 0) + 1
+        seen[s.persistent_id] = count
+        if count > 1:
+            s.id = f"{s.persistent_id}#{count}"
+    return songs
 
 
 class AppleMusicBridge:
-    """Interface for querying and creating playlists in Apple Music (macOS Music.app)."""
+    def __init__(self, demo: Optional[bool] = None):
+        self.demo = (sys.platform != "darwin") if demo is None else demo
+        self._demo_library = _build_demo_library() if self.demo else {}
 
     def is_macos(self) -> bool:
         return sys.platform == "darwin"
 
-    def run_applescript(self, script: str) -> str:
-        """Executes an AppleScript via `osascript` on macOS."""
-        if not self.is_macos():
-            raise RuntimeError("AppleScript execution is only available on macOS.")
+    @property
+    def mode(self) -> str:
+        return "demo" if self.demo else "music_app"
 
-        cmd = ['osascript', '-e', script]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def run_applescript(self, script: str, *args: str) -> str:
+        try:
+            proc = subprocess.run(["osascript", "-", *args], input=script, capture_output=True,
+                                  text=True, encoding="utf-8", timeout=1000)
+        except FileNotFoundError:
+            raise MusicAppError("osascript not found; Apple Music control requires macOS.")
+        except subprocess.TimeoutExpired:
+            raise MusicAppError("Music.app did not respond in time.")
         if proc.returncode != 0:
-            raise RuntimeError(f"osascript error ({proc.returncode}): {proc.stderr.strip()}")
-        return proc.stdout.strip()
+            err = proc.stderr.strip()
+            if "-1743" in err or "Not authorized" in err:
+                raise MusicAppError(
+                    "macOS blocked access to Music. Open System Settings → Privacy & Security → "
+                    "Automation and allow your Terminal app to control Music, then try again.")
+            if "-1728" in err or "Can’t get" in err or "Can't get" in err:
+                raise MusicAppError("Playlist not found in Music. It may have been renamed or deleted; refresh the list.")
+            raise MusicAppError(f"Music.app error: {err or 'unknown error'}")
+        return proc.stdout.rstrip("\n")
 
     def get_all_playlists(self) -> List[Dict[str, Any]]:
-        """List user playlists from Music.app."""
-        if not self.is_macos():
-            return self._get_mock_playlists()
+        if self.demo:
+            return [{"name": p["name"], "id": pid, "track_count": len(p["tracks"]), "smart": False}
+                    for pid, p in self._demo_library.items()]
 
-        script = """
-        tell application "Music"
-            set output to ""
-            repeat with p in user playlists
-                set pName to name of p
-                set pId to id of p
-                set tCount to count of tracks of p
-                set output to output & pName & ":::" & pId & ":::" & (tCount as string) & linefeed
-            end repeat
-            return output
-        end tell
-        """
-        try:
-            raw = self.run_applescript(script)
-            results = []
-            for line in raw.splitlines():
-                parts = line.strip().split(":::")
-                if len(parts) >= 3:
-                    results.append({
-                        "name": parts[0],
-                        "id": parts[1],
-                        "track_count": int(parts[2]) if parts[2].isdigit() else 0
-                    })
-            return results
-        except Exception as e:
-            # Fall back or re-raise
-            raise RuntimeError(f"Failed to query playlists from Music.app: {e}")
+        playlists = []
+        for parts in _split_records(self.run_applescript(LIST_PLAYLISTS_SCRIPT)):
+            if len(parts) >= 3 and parts[1]:
+                playlists.append({
+                    "name": parts[0],
+                    "id": parts[1],
+                    "track_count": int(_to_float(parts[2])),
+                    "smart": len(parts) > 3 and parts[3].strip().lower() == "true",
+                })
+        return playlists
 
-    def get_playlist_tracks(self, playlist_name_or_id: str) -> List[Song]:
-        """Fetch all tracks from a playlist in Music.app."""
-        if not self.is_macos():
-            return self._get_mock_tracks(playlist_name_or_id)
+    def find_playlist(self, name_or_id: str) -> Optional[Dict[str, Any]]:
+        playlists = self.get_all_playlists()
+        for p in playlists:
+            if p["id"] == name_or_id:
+                return p
+        for p in playlists:
+            if p["name"] == name_or_id:
+                return p
+        lowered = name_or_id.lower()
+        return next((p for p in playlists if p["name"].lower() == lowered), None)
 
-        # AppleScript to extract track details (id, name, artist, album, duration, bpm, comment, grouping, location)
-        escaped_name = playlist_name_or_id.replace('"', '\\"')
-        script = f"""
-        tell application "Music"
-            try
-                set targetPlaylist to (first user playlist whose name is "{escaped_name}")
-            on error
-                try
-                    set targetPlaylist to (first user playlist whose persistent ID is "{escaped_name}")
-                on error
-                    error "Playlist not found: {escaped_name}"
-                end try
-            end try
+    def get_playlist_tracks(self, playlist_id: str) -> List[Song]:
+        if self.demo:
+            pl = self._demo_library.get(playlist_id) or next(
+                (p for p in self._demo_library.values() if p["name"] == playlist_id), None)
+            if pl is None:
+                raise MusicAppError(f"Playlist not found: {playlist_id}")
+            return _dedupe_ids([Song(**{**t, "extra": dict(t.get("extra", {}))}) for t in pl["tracks"]])
 
-            set trackData to ""
-            set trackList to tracks of targetPlaylist
-            repeat with trk in trackList
-                set tId to persistent ID of trk
-                set tName to name of trk
-                set tArtist to artist of trk
-                set tAlbum to album of trk
-                set tDuration to duration of trk
-                set tBpm to bpm of trk
-                set tComment to comment of trk
-                set tGrouping to grouping of trk
-                set tLoc to ""
-                try
-                    set tLoc to (POSIX path of (get location of trk))
-                end try
-
-                set trackData to trackData & tId & "<TAB>" & tName & "<TAB>" & tArtist & "<TAB>" & tAlbum & "<TAB>" & (tDuration as string) & "<TAB>" & (tBpm as string) & "<TAB>" & tComment & "<TAB>" & tGrouping & "<TAB>" & tLoc & "<EOL>"
-            end repeat
-            return trackData
-        end tell
-        """
-
-        raw = self.run_applescript(script)
-        songs: List[Song] = []
-        entries = raw.split("<EOL>")
-        for entry in entries:
-            entry = entry.strip()
-            if not entry:
+        songs = []
+        for parts in _split_records(self.run_applescript(GET_TRACKS_SCRIPT, playlist_id)):
+            if len(parts) < 10:
                 continue
-            parts = entry.split("<TAB>")
-            if len(parts) >= 9:
-                s_id, title, artist, album, dur_str, bpm_str, comment, grouping, loc = parts[:9]
-                try:
-                    dur = float(dur_str) if dur_str else 0.0
-                except ValueError:
-                    dur = 0.0
-                try:
-                    bpm = float(bpm_str) if bpm_str else 0.0
-                except ValueError:
-                    bpm = 0.0
+            pid, title, artist, album, dur, bpm, comment, grouping, genre, loc = parts[:10]
+            songs.append(Song(
+                id=pid, persistent_id=pid, title=title, artist=artist, album=album,
+                duration_seconds=_to_float(dur), bpm=_to_float(bpm), genre=genre,
+                location=loc or None, extra={"comment": comment, "grouping": grouping},
+            ))
+        return _dedupe_ids(songs)
 
-                song = Song(
-                    id=s_id,
-                    title=title,
-                    artist=artist,
-                    album=album,
-                    duration_seconds=dur,
-                    bpm=bpm,
-                    key_tag=None,
-                    location=loc if loc else None,
-                    extra={"comment": comment, "grouping": grouping}
-                )
-                songs.append(song)
-
-        return songs
-
-    def create_sorted_playlist(self, original_name: str, sorted_songs: List[Song], suffix: str = "sorted") -> str:
+    def create_sorted_playlist(self, source_playlist_id: str, source_name: str,
+                               sorted_songs: List[Song], suffix: str = "sorted") -> Dict[str, Any]:
         """
-        Creates a new playlist with 'sorted' appended to the name,
-        and adds the tracks in the exact sorted sequence.
-        Returns the new playlist name.
+        Create '<source_name> sorted' with tracks in the given order. A previous
+        playlist of that name is replaced only if this app created it; otherwise
+        ' (2)', ' (3)', ... is appended.
         """
-        new_name = f"{original_name} {suffix}".strip()
+        base_name = f"{source_name} {suffix}".strip()
+        track_ids = [s.persistent_id for s in sorted_songs]
 
-        if not self.is_macos():
-            return self._mock_create_sorted_playlist(new_name, sorted_songs)
+        if self.demo:
+            return self._demo_create(base_name, sorted_songs)
 
-        escaped_new_name = new_name.replace('"', '\\"')
-        
-        # Build list of IDs
-        id_list_str = '{"' + '", "'.join(s.id for s in sorted_songs) + '"}'
+        raw = self.run_applescript(CREATE_PLAYLIST_SCRIPT, source_playlist_id, base_name, APP_MARKER, *track_ids)
+        parts = raw.split(FIELD_SEP)
+        return {
+            "name": parts[0] if parts and parts[0] else base_name,
+            "added": int(_to_float(parts[1])) if len(parts) > 1 else len(track_ids),
+            "requested": len(track_ids),
+            "replaced": len(parts) > 2 and parts[2].strip().lower() == "true",
+        }
 
-        script = f"""
-        tell application "Music"
-            -- Check if playlist with new name already exists; if so, delete or reuse
-            if exists (user playlist "{escaped_new_name}") then
-                delete user playlist "{escaped_new_name}"
-            end if
+    def _demo_create(self, base_name: str, songs: List[Song]) -> Dict[str, Any]:
+        name, n, replaced = base_name, 1, False
+        while True:
+            clash = [pid for pid, p in self._demo_library.items() if p["name"] == name]
+            if not clash:
+                break
+            if all(self._demo_library[pid].get("ours") for pid in clash):
+                for pid in clash:
+                    del self._demo_library[pid]
+                replaced = True
+                break
+            n += 1
+            name = f"{base_name} ({n})"
+        pid = f"demo_sorted_{len(self._demo_library) + 1}_{abs(hash(name)) % 10000}"
+        self._demo_library[pid] = {
+            "name": name, "ours": True,
+            "tracks": [{k: v for k, v in vars(s).items()
+                        if k in ("id", "persistent_id", "title", "artist", "album", "bpm", "extra", "location")}
+                       | {"id": s.persistent_id} for s in songs],
+        }
+        return {"name": name, "added": len(songs), "requested": len(songs), "replaced": replaced}
 
-            set newPl to (make new user playlist with properties {{name:"{escaped_new_name}"}})
-            set trackIds to {id_list_str}
 
-            repeat with tid in trackIds
-                try
-                    set matchedTracks to (every track of playlist 1 whose persistent ID is tid)
-                    if (count of matchedTracks) > 0 then
-                        duplicate (first item of matchedTracks) to newPl
-                    end if
-                end try
-            end repeat
+def _t(pid: str, title: str, artist: str, bpm: float, comment: str = "", album: str = "") -> Dict[str, Any]:
+    return {"id": pid, "persistent_id": pid, "title": title, "artist": artist, "album": album,
+            "bpm": bpm, "extra": {"comment": comment, "grouping": ""}}
 
-            return name of newPl
-        end tell
-        """
 
-        res = self.run_applescript(script)
-        return res or new_name
-
-    # Mock helpers for Linux / Dev / Non-Mac testing
-    def _get_mock_playlists(self) -> List[Dict[str, Any]]:
-        return [
-            {"name": "Friday Night House", "id": "mock_pl_001", "track_count": 8},
-            {"name": "Sunset Melodic Mix", "id": "mock_pl_002", "track_count": 6},
-            {"name": "Festival Warmup", "id": "mock_pl_003", "track_count": 10},
-        ]
-
-    def _get_mock_tracks(self, playlist_name_or_id: str) -> List[Song]:
-        """Returns realistic mock tracks with known musical keys and Camelot values for testing and demonstration."""
-        if "sunset" in playlist_name_or_id.lower():
-            return [
-                Song(id="trk_s1", title="Opus", artist="Eric Prydz", album="Opus", bpm=126, extra={"comment": "Key: 8A", "grouping": "8A"}),
-                Song(id="trk_s2", title="Innerbloom", artist="RÜFÜS DU SOL", album="Bloom", bpm=124, extra={"comment": "9A"}),
-                Song(id="trk_s3", title="Sun & Moon", artist="Above & Beyond", album="Group Therapy", bpm=128, extra={"comment": "10B"}),
-                Song(id="trk_s4", title="Strobe", artist="deadmau5", album="For Lack of a Better Name", bpm=128, extra={"comment": "8A"}),
-                Song(id="trk_s5", title="Adagio for Strings", artist="Tiësto", album="Just Be", bpm=140, extra={"comment": "2A"}), # outlier
-                Song(id="trk_s6", title="Language", artist="Porter Robinson", album="Language", bpm=128, extra={"comment": "8B"}),
-            ]
-        elif "festival" in playlist_name_or_id.lower():
-            return [
-                Song(id="trk_f1", title="Titanium", artist="David Guetta", album="Nothing but the Beat", bpm=126, extra={"comment": "4B"}),
-                Song(id="trk_f2", title="Wake Me Up", artist="Avicii", album="True", bpm=124, extra={"comment": "10A"}),
-                Song(id="trk_f3", title="Animals", artist="Martin Garrix", album="Animals", bpm=128, extra={"comment": "5A"}),
-                Song(id="trk_f4", title="Clarity", artist="Zedd", album="Clarity", bpm=128, extra={"comment": "4B"}),
-                Song(id="trk_f5", title="Levels", artist="Avicii", album="Levels", bpm=126, extra={"comment": "3B"}),
-                Song(id="trk_f6", title="Silence", artist="Marshmello", album="Silence", bpm=142, extra={"comment": "11A"}),
-            ]
-        else: # Default Friday Night House
-            return [
-                Song(id="trk_1", title="Deep Inside", artist="Hardrive", album="Strictly Rhythm", bpm=124, extra={"comment": "8A", "grouping": "8A"}),
-                Song(id="trk_2", title="Cola", artist="CamelPhat & Elderbrook", album="Defected", bpm=122, extra={"comment": "9A"}),
-                Song(id="trk_3", title="Show Me Love", artist="Robin S", album="Stonebridge Mix", bpm=120, extra={"comment": "8B"}),
-                Song(id="trk_4", title="Losing It", artist="FISHER", album="Catch & Release", bpm=125, extra={"comment": "10A"}),
-                Song(id="trk_5", title="Bangarang", artist="Skrillex", album="Bangarang", bpm=110, extra={"comment": "2B"}), # Severe harmonic outlier
-                Song(id="trk_6", title="Love Story", artist="Taylor Swift", album="Fearless", bpm=119, extra={"comment": "2B"}), # Clash outlier
-                Song(id="trk_7", title="Piece of Your Heart", artist="Meduza", album="Polydor", bpm=124, extra={"comment": "9B"}),
-                Song(id="trk_8", title="One More Time", artist="Daft Punk", album="Discovery", bpm=123, extra={"comment": "8A"}),
-            ]
-
-    def _mock_create_sorted_playlist(self, new_name: str, sorted_songs: List[Song]) -> str:
-        return new_name
+def _build_demo_library() -> Dict[str, Dict[str, Any]]:
+    return {
+        "DEMO000000000001": {"name": "Friday Night House", "tracks": [
+            _t("D1A0000000000001", "Deep Inside", "Hardrive", 124, "8A"),
+            _t("D1A0000000000002", "Cola", "CamelPhat & Elderbrook", 122, "9A - Energy 6"),
+            _t("D1A0000000000003", "Show Me Love", "Robin S", 120, "Key: C major"),
+            _t("D1A0000000000004", "Losing It", "FISHER", 125, "10A"),
+            _t("D1A0000000000005", "Bangarang", "Skrillex", 110, "2B"),
+            _t("D1A0000000000006", "Love Story", "Taylor Swift", 119, "2B"),
+            _t("D1A0000000000007", "Piece of Your Heart", "Meduza", 124, "9B"),
+            _t("D1A0000000000008", "One More Time", "Daft Punk", 123, "Am"),
+            _t("D1A0000000000009", "Lose Control", "Meduza, Becky Hill & Goodboys", 124, ""),
+        ]},
+        "DEMO000000000002": {"name": "Sunset Melodic Mix", "tracks": [
+            _t("D2A0000000000001", "Opus", "Eric Prydz", 126, "8A"),
+            _t("D2A0000000000002", "Innerbloom", "RÜFÜS DU SOL", 124, "9A"),
+            _t("D2A0000000000003", "Sun & Moon", "Above & Beyond", 128, "10B"),
+            _t("D2A0000000000004", "Strobe", "deadmau5", 128, "8A"),
+            _t("D2A0000000000005", "Adagio for Strings", "Tiësto", 140, "2A"),
+            _t("D2A0000000000006", "Language", "Porter Robinson", 128, "8B"),
+        ]},
+        "DEMO000000000003": {"name": "Festival Warmup", "tracks": [
+            _t("D3A0000000000001", "Titanium", "David Guetta", 126, "4B"),
+            _t("D3A0000000000002", "Wake Me Up", "Avicii", 124, "10A"),
+            _t("D3A0000000000003", "Animals", "Martin Garrix", 128, "5A"),
+            _t("D3A0000000000004", "Clarity", "Zedd", 128, "4B"),
+            _t("D3A0000000000005", "Levels", "Avicii", 126, "3B"),
+            _t("D3A0000000000006", "Silence", "Marshmello", 142, "11A"),
+            _t("D3A0000000000007", "Don't You Worry Child", "Swedish House Mafia", 129, "3B"),
+            _t("D3A0000000000008", "Lean On", "Major Lazer", 98, "6A"),
+        ]},
+    }

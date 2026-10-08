@@ -1,26 +1,16 @@
-"""
-Camelot DJ Apple Music Sorter package.
-"""
+"""Camelot DJ Apple Music Sorter."""
 
-from .camelot import MusicalKey, transition_score, camelot_distance
-from .song_model import Song, KeyResolver
-from .audio_engine import detect_key_from_audio_file, compute_chroma_from_pcm, estimate_key_from_chroma
+from .camelot import MusicalKey, camelot_distance, extract_key, transition_score
+from .song_model import KeyResolver, Song
+from .audio_engine import compute_chroma_from_pcm, detect_key_from_audio_file, estimate_key_from_chroma
 from .sorter import HarmonicPlaylistSorter, SortResult
-from .apple_music import AppleMusicBridge
-from .server import run_web_server
+from .apple_music import AppleMusicBridge, MusicAppError
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = [
-    "MusicalKey",
-    "transition_score",
-    "camelot_distance",
-    "Song",
-    "KeyResolver",
-    "detect_key_from_audio_file",
-    "compute_chroma_from_pcm",
-    "estimate_key_from_chroma",
-    "HarmonicPlaylistSorter",
-    "SortResult",
-    "AppleMusicBridge",
-    "run_web_server",
+    "MusicalKey", "camelot_distance", "extract_key", "transition_score",
+    "KeyResolver", "Song",
+    "compute_chroma_from_pcm", "detect_key_from_audio_file", "estimate_key_from_chroma",
+    "HarmonicPlaylistSorter", "SortResult",
+    "AppleMusicBridge", "MusicAppError",
 ]
