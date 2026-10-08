@@ -68,6 +68,34 @@ class TestServerAndApi(unittest.TestCase):
         self.assertEqual(created["name"], "Friday Night House sorted")
         self.assertEqual(created["added"], len(ids))
 
+    def test_manual_placement_keeps_songs_above_and_marks_song_manual(self):
+        _, data = self.request("POST", "/api/analyze", {"playlist_id": self.friday["id"]})
+        order = [s["id"] for s in data["sorted_songs"]]
+        moved = order[6]
+        new = [i for i in order if i != moved]
+        new.insert(2, moved)
+        status, data = self.request("POST", "/api/analyze", {
+            "playlist_id": self.friday["id"], "keep_ids": new[:2], "manual": [{"id": moved, "position": 2}]})
+        self.assertEqual(status, 200)
+        out = data["sorted_songs"]
+        self.assertEqual([s["id"] for s in out[:3]], new[:3])
+        self.assertEqual([s["id"] for s in out if s["manual"]], [moved])
+        self.assertEqual(sorted(s["id"] for s in out), sorted(order))
+
+    def test_insert_mode_restores_song_without_reordering_others(self):
+        _, data = self.request("POST", "/api/analyze", {"playlist_id": self.friday["id"]})
+        order = [s["id"] for s in data["sorted_songs"]]
+        back = order[4]
+        rest = [i for i in order if i != back]
+        status, data = self.request("POST", "/api/analyze", {
+            "playlist_id": self.friday["id"], "order": rest, "insert_ids": [back],
+            "manual": [{"id": rest[0], "position": 0}]})
+        self.assertEqual(status, 200)
+        out = [s["id"] for s in data["sorted_songs"]]
+        self.assertEqual([i for i in out if i != back], rest)
+        self.assertIn(back, out)
+        self.assertTrue(data["sorted_songs"][out.index(rest[0])]["manual"])
+
     def test_export_requires_analysis(self):
         status, data = self.request("POST", "/api/export", {"playlist_id": self.friday["id"], "ordered_ids": ["x"]})
         self.assertEqual(status, 400)

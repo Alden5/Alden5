@@ -52,12 +52,27 @@ class AppState:
         return songs
 
 
-def serialize_result(playlist: Dict[str, Any], result: SortResult, excluded: List[Song]) -> Dict[str, Any]:
+def _parse_manual(raw: Any) -> Dict[str, int]:
+    """Accept manual pins as [{"id", "position"}] or {"id": position}."""
+    items = raw.items() if isinstance(raw, dict) else (
+        (m.get("id"), m.get("position")) for m in raw if isinstance(m, dict)) if isinstance(raw, list) else ()
+    manual = {}
+    for sid, pos in items:
+        try:
+            manual[str(sid)] = int(pos)
+        except (TypeError, ValueError):
+            continue
+    return manual
+
+
+def serialize_result(playlist: Dict[str, Any], result: SortResult, excluded: List[Song],
+                     manual_ids: Optional[set] = None) -> Dict[str, Any]:
+    manual_ids = manual_ids or set()
     return {
         "playlist": playlist,
         "new_playlist_name": f"{playlist['name']} sorted",
         "summary": result.summary(),
-        "sorted_songs": [s.to_dict() for s in result.sorted_songs],
+        "sorted_songs": [{**s.to_dict(), "manual": s.id in manual_ids} for s in result.sorted_songs],
         "original_order_ids": [s.id for s in result.original_songs],
         "transitions": [
             {"penalty": round(t.penalty, 2), "description": t.description,
@@ -153,9 +168,23 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
         exclude = set(payload.get("exclude_ids") or [])
         kept = [s for s in songs if s.id not in exclude]
         excluded = [s for s in songs if s.id in exclude]
+        by_id = {s.id: s for s in kept}
+        manual = _parse_manual(payload.get("manual"))
+        if payload.get("start_id"):
+            manual.setdefault(payload["start_id"], 0)
+        manual = {i: p for i, p in manual.items() if i in by_id}
         sorter = HarmonicPlaylistSorter(energy_flow_preference=payload.get("strategy") or "gradual_build")
-        result = sorter.sort_and_analyze(kept, start_id=payload.get("start_id") or None)
-        self._send_json(serialize_result(playlist, result, excluded))
+
+        order = payload.get("order")
+        if isinstance(order, list):
+            # Insert mode: keep the current order and slot songs in at their cheapest position.
+            insert_ids = set(payload.get("insert_ids") or [])
+            base = [by_id[i] for i in dict.fromkeys(order) if i in by_id and i not in insert_ids]
+            placed = {s.id for s in base}
+            result = sorter.analyze_order(kept, sorter.insert(base, [s for s in kept if s.id not in placed]))
+        else:
+            result = sorter.arrange(kept, keep_ids=payload.get("keep_ids") or (), manual=manual)
+        self._send_json(serialize_result(playlist, result, excluded, set(manual)))
 
     def _export(self, payload: Dict[str, Any]) -> None:
         playlist = self._playlist(payload.get("playlist_id") or "")

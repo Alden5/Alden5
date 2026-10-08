@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 from camelot_music_sorter.camelot import MusicalKey, transition_score
-from camelot_music_sorter.optimizer import _exact, path_cost, solve
+from camelot_music_sorter.optimizer import _exact, path_cost, solve, solve_slots
 from camelot_music_sorter.sorter import (
     SMOOTH_THRESHOLD, HarmonicPlaylistSorter, artist_names, calculate_pairwise_cost, musical_cost_matrix,
 )
@@ -128,6 +128,69 @@ class TestCamelotRules(unittest.TestCase):
         self.assertLess(cost("8A", "3A"), cost("8A", "1A"))      # semitone lift beats other far jumps
         self.assertGreater(cost("8A", "3A"), SMOOTH_THRESHOLD)
         self.assertEqual(transition_score(k("8A"), k("3A"))[1], "Semitone lift (cut, don't blend)")
+
+
+class TestManualOrdering(unittest.TestCase):
+    def test_solve_slots_keeps_fixed_positions_and_is_optimal(self):
+        rng = np.random.default_rng(3)
+        for trial in range(25):
+            n = 8
+            C = rng.random((n, n)) * 5
+            np.fill_diagonal(C, 0)
+            r = random.Random(trial)
+            ids = r.sample(range(n), 3)
+            positions = r.sample(range(n), 3)
+            slots = [None] * n
+            for p, i in zip(positions, ids):
+                slots[p] = i
+            free = [i for i in range(n) if i not in ids]
+            out = solve_slots(C, slots, free, seed=0, time_limit=1.0)
+            self.assertEqual(sorted(out), list(range(n)))
+            for p, i in zip(positions, ids):
+                self.assertEqual(out[p], i)
+            free_pos = [p for p in range(n) if slots[p] is None]
+            best = min(path_cost([dict(zip(free_pos, perm)).get(p, slots[p]) for p in range(n)], C)
+                       for perm in itertools.permutations(free))
+            self.assertAlmostEqual(path_cost(out, C), best, places=6)
+
+    def test_manual_song_stays_put_prefix_is_kept_and_rest_re_sorts(self):
+        songs = random_playlist(30, random.Random(11))
+        sorter = HarmonicPlaylistSorter(time_limit=0.5)
+        order = [s.id for s in sorter.arrange(songs).sorted_songs]
+        moved = order[25]
+        new = [i for i in order if i != moved]
+        new.insert(4, moved)
+        result = sorter.arrange(songs, keep_ids=new[:4], manual={moved: 4, order[20]: 20})
+        out = [s.id for s in result.sorted_songs]
+        self.assertEqual(out[:5], new[:5])
+        self.assertEqual(out[20], order[20])
+        self.assertEqual(sorted(out), sorted(order))
+
+    def test_out_of_range_and_colliding_pins_are_clamped(self):
+        songs = [keyed(i, c) for i, c in enumerate(["8A", "9A", "10A", "3B", "4B"])]
+        out = HarmonicPlaylistSorter().arrange_order(songs, keep_ids=["0", "1"], manual={"3": 0, "4": 99})
+        ids = [s.id for s in out]
+        self.assertEqual(ids[:3], ["0", "1", "3"])
+        self.assertEqual(ids[-1], "4")
+
+    def test_unknown_keys_go_last_unless_placed(self):
+        songs = [keyed(0, "8A"), keyed(1, None), keyed(2, "9A"), keyed(3, "8B"), keyed(4, None)]
+        sorter = HarmonicPlaylistSorter()
+        ids = [s.id for s in sorter.arrange_order(songs)]
+        self.assertEqual(set(ids[-2:]), {"1", "4"})
+        ids = [s.id for s in sorter.arrange_order(songs, manual={"1": 0})]
+        self.assertEqual(ids[0], "1")
+        self.assertEqual(ids[-1], "4")
+
+    def test_insert_uses_cheapest_spot_without_moving_others(self):
+        base = [keyed(0, "6A"), keyed(1, "7A"), keyed(3, "9A"), keyed(4, "10A")]
+        out = HarmonicPlaylistSorter(energy_flow_preference="balanced").insert(base, [keyed(2, "8A")])
+        self.assertEqual([s.id for s in out], ["0", "1", "2", "3", "4"])
+
+    def test_start_id_still_supported(self):
+        songs = random_playlist(12, random.Random(5))
+        result = HarmonicPlaylistSorter().sort_and_analyze(songs, start_id="7")
+        self.assertEqual(result.sorted_songs[0].id, "7")
 
 
 if __name__ == "__main__":
