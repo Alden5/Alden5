@@ -107,10 +107,14 @@ def _run(args, bridge: AppleMusicBridge) -> int:
     for i, s in enumerate(result.sorted_songs):
         t = result.transitions[i] if i < len(result.transitions) else None
         mark = "" if t is None else ("  ✓" if t.is_smooth else ("" if t.is_unknown else "  ✗"))
-        nxt = f"  → {t.description}{mark}" if t else ""
-        print(f"  {i + 1:3d}. [{_key(s):>3}] {s.artist} – {s.title}{nxt}")
+        score_badge = f" [{t.compatibility_score}/100]" if (t and not t.is_unknown) else ""
+        nxt = f"  → {t.description}{score_badge}{mark}" if t else ""
+        nrg = f" E:{s.energy:.1f}" if s.energy is not None else ""
+        print(f"  {i + 1:3d}. [{_key(s):>3}{nrg}] {s.artist} – {s.title}{nxt}")
 
+    avg_score = summary.get("avg_compatibility_score", 0.0)
     print(f"\nSmooth mixes: {summary['smooth_transitions']}/{summary['scored_transitions']}   "
+          f"Avg compatibility: {avg_score}/100   "
           f"Friction reduced: {summary['improvement_percent']:.0f}% "
           f"({summary['initial_penalty']} → {summary['final_penalty']})")
 

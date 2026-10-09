@@ -37,6 +37,90 @@ class TransitionInfo:
     description: str
     is_smooth: bool
     is_unknown: bool = False
+    compatibility_score: int = 50
+    energy_delta: float = 0.0
+
+
+def calculate_compatibility_score(s1: Song, s2: Song) -> Tuple[int, float, str]:
+    """
+    Compute a granular 1-100 compatibility score from s1 to s2, incorporating:
+    - Harmonic compatibility (Camelot wheel relationship: 0-60 pts)
+    - Tempo matching (beatmatching / tempo continuity: 0-25 pts)
+    - Energy continuity & flow (energy delta: 0-15 pts)
+
+    Returns (score_100, cost_penalty, description).
+    """
+    if not s1.resolved_key or not s2.resolved_key:
+        return 40, 5.0, "Key unknown"
+
+    cost, desc = transition_score(s1.resolved_key, s2.resolved_key)
+
+    # 1. Harmonic score (0 to 60)
+    # transition_score returns 0.0 (same key) to 8.5 (opposite side / 6-step)
+    # Smooth transitions have cost <= 2.5
+    if cost == 0.0:
+        harm_score = 60.0
+    elif cost <= 0.3:  # Relative major/minor (0.2)
+        harm_score = 58.0
+    elif cost <= 0.6:  # Harmonic step +/- 1 (0.5)
+        harm_score = 55.0
+    elif cost <= 1.1:  # Diagonal mood shift (1.0)
+        harm_score = 50.0
+    elif cost <= 1.9:  # Diagonal step (1.8)
+        harm_score = 44.0
+    elif cost <= 2.4:  # Energy boost (+2) or drop (-2) (2.0 - 2.3)
+        harm_score = 38.0
+    elif cost <= 3.1:  # Semitone lift / mode shift (3.0 - 3.2)
+        harm_score = 24.0
+    elif cost <= 4.6:  # 3-step jump (4.5)
+        harm_score = 15.0
+    elif cost <= 6.1:  # 4-step jump (6.0)
+        harm_score = 8.0
+    elif cost <= 7.1:  # 5-step jump (7.0)
+        harm_score = 3.0
+    else:  # Opposite side (8.5)
+        harm_score = 0.0
+
+    # 2. Tempo score (0 to 25)
+    tempo_score = 25.0
+    tempo_penalty = 0.0
+    if s1.bpm > 0 and s2.bpm > 0:
+        bpm_diff = min(abs(s2.bpm - s1.bpm), abs(s2.bpm - 2 * s1.bpm), abs(s2.bpm - 0.5 * s1.bpm))
+        pct = bpm_diff / s1.bpm
+        if pct <= 0.015:
+            tempo_score = 25.0
+        elif pct <= 0.04:
+            tempo_score = 23.0
+        elif pct <= 0.06:
+            tempo_score = 20.0
+        else:
+            tempo_penalty = min(4.0, (pct - 0.06) * 25)
+            cost += tempo_penalty
+            desc += f" (tempo jump {s1.bpm:.0f}→{s2.bpm:.0f} BPM)"
+            tempo_score = max(0.0, 20.0 - min(20.0, (pct - 0.06) * 150))
+
+    # 3. Energy score (0 to 15)
+    e1 = s1.energy if s1.energy is not None else 5.5
+    e2 = s2.energy if s2.energy is not None else 5.5
+    e_diff = e2 - e1  # positive means rising energy
+
+    # An energy difference within +/- 1.0 is great continuity (15 pts).
+    # Moderate rise (+1.0 to +2.5) is natural progression (13-15 pts).
+    # Steep drop or jump (> 3.5) causes an energy cliff.
+    abs_ediff = abs(e_diff)
+    if abs_ediff <= 1.0:
+        energy_score = 15.0
+    elif abs_ediff <= 2.0:
+        energy_score = 12.0
+    elif abs_ediff <= 3.5:
+        energy_score = 8.0
+    elif abs_ediff <= 5.0:
+        energy_score = 4.0
+    else:
+        energy_score = 1.0
+
+    total_score = int(round(np.clip(harm_score + tempo_score + energy_score, 1.0, 100.0)))
+    return total_score, cost, desc
 
 
 @dataclass
@@ -121,6 +205,7 @@ class SortResult:
 
     def summary(self) -> Dict[str, Any]:
         scored = [t for t in self.transitions if not t.is_unknown]
+        avg_compat = round(float(np.mean([t.compatibility_score for t in scored])), 1) if scored else 0.0
         return {
             "track_count": len(self.sorted_songs),
             "known_key_count": len(self.sorted_songs) - len(self.unknown_key_songs),
@@ -132,25 +217,13 @@ class SortResult:
             "scored_transitions": len(scored),
             "smooth_transitions": sum(1 for t in scored if t.is_smooth),
             "rough_transitions": sum(1 for t in scored if not t.is_smooth),
+            "avg_compatibility_score": avg_compat,
         }
 
 
 def calculate_pairwise_cost(s1: Song, s2: Song) -> Tuple[float, str]:
     """Mixing cost from s1 into s2 (key compatibility plus a tempo penalty)."""
-    if not s1.resolved_key or not s2.resolved_key:
-        return 5.0, "Key unknown"
-
-    cost, desc = transition_score(s1.resolved_key, s2.resolved_key)
-
-    if s1.bpm > 0 and s2.bpm > 0:
-        # Half/double time mixes are fine (e.g. 87 -> 174).
-        bpm_diff = min(abs(s2.bpm - s1.bpm), abs(s2.bpm - 2 * s1.bpm), abs(s2.bpm - 0.5 * s1.bpm))
-        pct = bpm_diff / s1.bpm
-        # Up to ~6% can be beatmatched without audible pitch/tempo artifacts.
-        if pct > 0.06:
-            cost += min(4.0, (pct - 0.06) * 25)
-            desc += f" (tempo jump {s1.bpm:.0f}→{s2.bpm:.0f} BPM)"
-
+    _, cost, desc = calculate_compatibility_score(s1, s2)
     return cost, desc
 
 
@@ -160,10 +233,21 @@ def evaluate_playlist_order(songs: List[Song]) -> Tuple[float, List[TransitionIn
     transitions = []
     for a, b in zip(songs, songs[1:]):
         unknown = not a.resolved_key or not b.resolved_key
-        cost, desc = calculate_pairwise_cost(a, b)
+        compat_score, cost, desc = calculate_compatibility_score(a, b)
         if not unknown:
             total += cost
-        transitions.append(TransitionInfo(a, b, cost, desc, (not unknown) and cost <= SMOOTH_THRESHOLD, unknown))
+        e1 = a.energy if a.energy is not None else 5.5
+        e2 = b.energy if b.energy is not None else 5.5
+        transitions.append(TransitionInfo(
+            from_song=a,
+            to_song=b,
+            penalty=cost,
+            description=desc,
+            is_smooth=(not unknown) and cost <= SMOOTH_THRESHOLD,
+            is_unknown=unknown,
+            compatibility_score=compat_score,
+            energy_delta=round(e2 - e1, 1),
+        ))
     return total, transitions
 
 
@@ -235,6 +319,21 @@ class HarmonicPlaylistSorter:
             with np.errstate(divide="ignore", invalid="ignore"):
                 drop = (a > 0) & (b > 0) & (b < 0.995 * a) & (np.abs(b - 0.5 * a) > 0.03 * a)
                 obj += np.where(drop, TEMPO_DROP_PENALTY + np.minimum(0.9, (a - b) / a * 8), 0.0)
+
+            # Energy flow in gradual build: reward gradual climb (+0.2 to +2.0), penalize energy drop
+            e = np.array([s.energy if s.energy is not None else 5.5 for s in songs], dtype=float)
+            ea, eb = e[:, None], e[None, :]
+            edelta = eb - ea
+            # Slight bonus for modest energy progression
+            obj -= np.where((edelta > 0.1) & (edelta <= 2.2), 0.12, 0.0)
+            # Penalty for steep energy drop
+            obj += np.where(edelta < -0.8, np.minimum(0.8, (-edelta - 0.8) * 0.25), 0.0)
+        else:
+            # Balanced flow: penalize extreme energy jumps/drops to maintain cohesive room feel
+            e = np.array([s.energy if s.energy is not None else 5.5 for s in songs], dtype=float)
+            ea, eb = e[:, None], e[None, :]
+            edelta_abs = np.abs(eb - ea)
+            obj += np.where(edelta_abs > 2.5, np.minimum(0.6, (edelta_abs - 2.5) * 0.2), 0.0)
 
         np.fill_diagonal(obj, 0.0)
         return obj

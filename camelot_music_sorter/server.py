@@ -76,7 +76,9 @@ def serialize_result(playlist: Dict[str, Any], result: SortResult, excluded: Lis
         "original_order_ids": [s.id for s in result.original_songs],
         "transitions": [
             {"penalty": round(t.penalty, 2), "description": t.description,
-             "is_smooth": t.is_smooth, "is_unknown": t.is_unknown}
+             "is_smooth": t.is_smooth, "is_unknown": t.is_unknown,
+             "compatibility_score": t.compatibility_score,
+             "energy_delta": t.energy_delta}
             for t in result.transitions
         ],
         "suggestions": [

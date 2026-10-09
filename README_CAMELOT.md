@@ -33,13 +33,14 @@ camelot-sorter              # or: python3 run_sorter.py
 Your browser opens at `http://localhost:8765`.
 
 1. Click a playlist in the sidebar. Its keys are calculated and it's sorted right away.
-2. Review the running order. Each row shows the song's Camelot key, BPM and where
-   the key came from. Between rows you can see how well each song mixes into the
-   next one: green is a smooth mix and red is a key clash. The **Set journey**
-   chart on the right shows tempo (or key) from the first song to the last.
+2. Review the running order. Each row shows the song's Camelot key, energy level (1–10),
+   BPM and where the key came from. Between rows you can see the granular **1–100 compatibility score**
+   and how well each song mixes into the next: green (85–100) is seamless, cyan (70–84) is a clean mix,
+   yellow (50–69) is workable, and red (<50) is a clash. The **Set journey** chart on the right displays
+   the overall energy curve and tempo across your playlist.
 3. Choose a **Flow**:
-   - *Build energy* prefers rising tempo and stepping up the wheel (8A → 9A → 10A).
-   - *Smoothest* minimizes clashes in either direction.
+   - *Build energy* prefers rising tempo, stepping up the wheel (8A → 9A → 10A), and smooth energy progression.
+   - *Smoothest* minimizes clashes and abrupt energy swings in either direction.
 4. In the **Trim** tab on the right, choose how many songs you're willing to remove. The app
    picks the songs whose removal helps most and summarizes the effect: key clashes,
    smooth mixes and mixing friction before and after. Press **Remove these songs**
@@ -120,9 +121,19 @@ one of these has no key in Comments or Grouping, it is marked **?** and placed
 at the end instead of being given a guessed key. To include it, add its key to
 Comments in Music and press **↻**.
 
+## Energy level detection
+
+In addition to key and tempo, the sorter calculates an **Energy level (1.0 to 10.0)** for every song:
+1. **Metadata tags**: Reads energy tags from comments or grouping (e.g. `8A - Energy 7`, `E:8`, `Energy level 6`).
+2. **Audio analysis**: For local audio files, extracts RMS loudness, spectral centroid (brightness), and dynamic crest factor via ffmpeg.
+3. **Smart metadata fallback**: When audio PCM is unavailable (streaming / cloud tracks), estimates energy using BPM, genre (e.g. ambient vs. techno/hardstyle), and rating.
+
 ## How sorting works
 
-Each pair of songs gets a mixing cost based on Camelot rules:
+Each pair of songs gets a granular **1–100 compatibility score** based on:
+- **Harmonic compatibility** (Camelot distance, relative major/minor, diagonal mood shifts; up to 60 points)
+- **Tempo matching** (beatmatching margin and half/double-time harmony; up to 25 points)
+- **Energy flow & continuity** (energy delta continuity; up to 15 points)
 
 | Move | Example | Cost |
 |---|---|---:|
@@ -147,7 +158,7 @@ The app looks for the best order in this priority:
 3. **Variety.** The same artist doesn't play twice in a row, including
    features (e.g. "Meduza" and "Meduza, Becky Hill & Goodboys"), and duplicate
    copies of a song are never placed next to each other.
-4. With **Build energy**, tempo rises through the set and keys step up the wheel.
+4. **Energy trajectory.** With **Build energy**, tempo and energy rise smoothly through the set while keys step up the wheel. With **Smoothest**, energy drops and extreme spikes are smoothed out.
 
 Playlists of up to 13 songs are solved exactly. Larger ones use iterated local
 search: 2-opt and Or-opt moves, restarted from random shuffles. This takes

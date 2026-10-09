@@ -275,5 +275,82 @@ class TestMusicAppBridge(unittest.TestCase):
         self.assertEqual(len(demo.get_playlist_tracks("Friday Night House sorted")), 3)
 
 
+class TestEnergyAndCompatibility(unittest.TestCase):
+    def test_extract_energy_from_text(self):
+        from camelot_music_sorter.song_model import extract_energy_from_text
+        self.assertEqual(extract_energy_from_text("8A - Energy 7"), 7.0)
+        self.assertEqual(extract_energy_from_text("Energy: 8.5"), 8.5)
+        self.assertEqual(extract_energy_from_text("Energy level 9"), 9.0)
+        self.assertEqual(extract_energy_from_text("E:6"), 6.0)
+        self.assertEqual(extract_energy_from_text("E8"), 8.0)
+        self.assertEqual(extract_energy_from_text("9B / 7"), 7.0)
+        self.assertIsNone(extract_energy_from_text("Just a normal song"))
+        self.assertIsNone(extract_energy_from_text(None))
+
+    def test_estimate_energy_from_metadata(self):
+        from camelot_music_sorter.song_model import estimate_energy_from_metadata
+        edm = estimate_energy_from_metadata(bpm=128, genre="EDM")
+        ambient = estimate_energy_from_metadata(bpm=70, genre="Ambient Chill")
+        self.assertGreater(edm, ambient)
+        self.assertTrue(1.0 <= edm <= 10.0)
+        self.assertTrue(1.0 <= ambient <= 10.0)
+
+    def test_compute_energy_from_pcm(self):
+        from camelot_music_sorter.audio_engine import compute_energy_from_pcm
+        # Quiet low-frequency audio vs loud high-frequency noise
+        sr = 22050
+        t = np.arange(sr * 2) / sr
+        quiet = (0.01 * np.sin(2 * np.pi * 100 * t)).astype(np.float32)
+        loud = (0.8 * np.sin(2 * np.pi * 1500 * t)).astype(np.float32)
+        e_quiet = compute_energy_from_pcm(quiet, sr)
+        e_loud = compute_energy_from_pcm(loud, sr)
+        self.assertGreater(e_loud, e_quiet)
+        self.assertTrue(1.0 <= e_quiet <= 10.0)
+        self.assertTrue(1.0 <= e_loud <= 10.0)
+
+    def test_compatibility_scoring_granularity(self):
+        from camelot_music_sorter.sorter import calculate_compatibility_score
+        s1 = keyed(1, "8A", 124)
+        s1.energy = 6.0
+
+        # Perfect match: same key, same bpm, same energy
+        s2 = keyed(2, "8A", 124)
+        s2.energy = 6.0
+        score_perf, cost_perf, _ = calculate_compatibility_score(s1, s2)
+        self.assertEqual(score_perf, 100)
+        self.assertEqual(cost_perf, 0.0)
+
+        # Smooth harmonic step: 8A -> 9A, tempo matched, similar energy
+        s3 = keyed(3, "9A", 124)
+        s3.energy = 6.5
+        score_step, cost_step, _ = calculate_compatibility_score(s1, s3)
+        self.assertGreaterEqual(score_step, 90)
+        self.assertLess(score_step, 100)
+
+        # Key clash: opposite side of the wheel (8A -> 2A)
+        s4 = keyed(4, "2A", 124)
+        s4.energy = 6.0
+        score_clash, cost_clash, _ = calculate_compatibility_score(s1, s4)
+        self.assertLess(score_clash, 50)
+        self.assertGreater(cost_clash, 2.5)
+
+        # Energy cliff / extreme tempo jump lowers compatibility
+        s5 = keyed(5, "8A", 160)  # Large tempo jump
+        s5.energy = 1.0  # Big drop
+        score_cliff, _, _ = calculate_compatibility_score(s1, s5)
+        self.assertLess(score_cliff, score_perf)
+
+    def test_resolver_energy_integration(self):
+        resolver = KeyResolver(cache_path=None, enable_audio_analysis=False)
+        song = Song(id="1", title="Test", artist="Artist", bpm=128, genre="House", extra={"comment": "8A - Energy 7"})
+        resolved = resolver.resolve(song)
+        self.assertEqual(resolved.resolved_key.camelot, "8A")
+        self.assertEqual(resolved.energy, 7.0)
+        self.assertEqual(resolved.energy_source, "metadata")
+        d = resolved.to_dict()
+        self.assertEqual(d["energy"], 7.0)
+        self.assertEqual(d["energy_source"], "metadata")
+
+
 if __name__ == "__main__":
     unittest.main()

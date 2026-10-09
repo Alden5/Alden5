@@ -52,6 +52,8 @@ class TestServerAndApi(unittest.TestCase):
         self.assertEqual(len(data["sorted_songs"]), 9)
         self.assertIsNone(data["sorted_songs"][-1]["resolved_key"])
         self.assertTrue(data["suggestions"])
+        self.assertIn("compatibility_score", data["transitions"][0])
+        self.assertIn("energy", data["sorted_songs"][0])
 
         drop = [s["song"]["id"] for s in data["suggestions"]]
         start = data["sorted_songs"][3]["id"]

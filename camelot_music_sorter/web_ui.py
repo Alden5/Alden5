@@ -134,8 +134,8 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
   /* Track list */
   .tracks { position: relative; padding: 6px 0; }
-  .tracks, .list-head { --cols: 22px 26px 46px minmax(0, 1fr) auto 48px 46px 94px; }
-  .tracks.no-dur, .list-head.no-dur { --cols: 22px 26px 46px minmax(0, 1fr) auto 48px 94px; }
+  .tracks, .list-head { --cols: 22px 26px 46px minmax(0, 1fr) auto 42px 48px 46px 94px; }
+  .tracks.no-dur, .list-head.no-dur { --cols: 22px 26px 46px minmax(0, 1fr) auto 42px 48px 94px; }
   .no-dur .dur { display: none; }
   .row { display: grid; grid-template-columns: var(--cols); gap: 10px; align-items: center;
          padding: 7px 12px 7px 8px; margin: 0 6px; border-radius: 9px; border: 1px solid transparent; background: var(--panel);
@@ -173,10 +173,17 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .pill { display: inline-block; width: 44px; text-align: center; padding: 4px 0; border-radius: 7px;
           font-weight: 800; font-size: 12px; letter-spacing: .3px; }
   .pill.none { background: #2a3248; color: #aab4c8; }
-  .conn { display: flex; align-items: center; gap: 8px; height: 18px; padding-left: 52px; font-size: 11.5px; color: var(--faint); }
+  .conn { display: flex; align-items: center; gap: 8px; height: 22px; padding-left: 52px; font-size: 11.5px; color: var(--faint); }
   .conn::before { content: ""; width: 2px; height: 100%; background: currentColor; opacity: .5; margin-left: 9px; margin-right: 6px; border-radius: 1px; }
-  .conn.smooth { color: rgba(52,211,153,.8); } .conn.rough { color: var(--red); } .conn.unknown { color: var(--faint); }
+  .conn.smooth { color: rgba(52,211,153,.85); } .conn.rough { color: var(--red); } .conn.unknown { color: var(--faint); }
   .conn .d { opacity: .95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn .score-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: 10.5px; font-weight: 800; letter-spacing: .2px; flex-shrink: 0; }
+  .score-pill.score-excellent { background: rgba(52,211,153,.18); color: #6ee7b7; border: 1px solid rgba(52,211,153,.35); }
+  .score-pill.score-good { background: rgba(56,189,248,.18); color: #7dd3fc; border: 1px solid rgba(56,189,248,.35); }
+  .score-pill.score-fair { background: rgba(251,191,36,.18); color: #fde047; border: 1px solid rgba(251,191,36,.35); }
+  .score-pill.score-poor { background: rgba(248,113,113,.20); color: #fca5a5; border: 1px solid rgba(248,113,113,.4); }
+  .energy-pill { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 700; color: #cbd5e1; background: rgba(255,255,255,.05); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+  .energy-pill .e-bar { display: inline-block; width: 3px; height: 10px; border-radius: 1px; background: #64748b; margin-left: 2px; }
   .drop-line { position: absolute; left: 10px; right: 10px; height: 3px; border-radius: 2px; background: var(--manual);
                box-shadow: 0 0 12px var(--manual); pointer-events: none; z-index: 5; display: none; }
   .drop-line::before { content: ""; position: absolute; left: -5px; top: -4px; width: 11px; height: 11px; border-radius: 50%;
@@ -319,7 +326,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
     .content { padding: 18px 14px 0; }
     .export { margin: 16px -14px 0; padding: 12px 14px; }
     .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .tracks, .tracks.no-dur, .list-head, .list-head.no-dur { --cols: 22px 24px 44px minmax(0, 1fr) 40px 94px; }
+    .tracks, .tracks.no-dur, .list-head, .list-head.no-dur { --cols: 22px 24px 44px minmax(0, 1fr) 38px 40px 94px; }
     .row .tags, .row .dur, .list-head span:nth-child(5), .list-head .dur { display: none; }
     .steps { grid-template-columns: 1fr; }
     .card-head > div:first-child .hint { display: none; }
@@ -443,7 +450,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
                 <div class="filter"><svg class="i"><use href="#i-search"/></svg><input id="filter" type="search" placeholder="Filter songs  ( / )" autocomplete="off"></div>
               </div>
             </div>
-            <div class="list-head" id="list-head"><span></span><span>#</span><span>Key</span><span>Song</span><span></span><span>BPM</span><span class="dur">Time</span><span></span></div>
+            <div class="list-head" id="list-head"><span></span><span>#</span><span>Key</span><span>Song</span><span></span><span>Nrg</span><span>BPM</span><span class="dur">Time</span><span></span></div>
             <div id="tracks" class="tracks"></div>
           </div>
 
@@ -512,6 +519,20 @@ function pill(k) {
   if (!k) return '<span class="pill none" title="Key unknown">?</span>';
   const bg = KEY_COLORS[k.number - 1], fg = DARK_TEXT.has(k.number) ? '#000' : '#fff';
   return `<span class="pill" style="background:${bg};color:${fg}" title="${esc(k.standard_name)}">${esc(k.camelot)}</span>`;
+}
+function scorePill(score) {
+  if (score === undefined || score === null) return '';
+  let cls = 'score-poor';
+  if (score >= 85) cls = 'score-excellent';
+  else if (score >= 70) cls = 'score-good';
+  else if (score >= 50) cls = 'score-fair';
+  return `<span class="score-pill ${cls}" title="Compatibility: ${score}/100">${score}</span>`;
+}
+function energyPill(song) {
+  if (song.energy === undefined || song.energy === null) return '—';
+  const e = song.energy;
+  const src = song.energy_source === 'audio_analysis' ? 'from audio analysis' : (song.energy_source === 'metadata' ? 'from tag/comment' : 'estimated from tempo/genre');
+  return `<span class="energy-pill" title="Energy: ${e.toFixed(1)}/10 (${src})">${e.toFixed(1)}</span>`;
 }
 function fmtTime(sec) {
   sec = Math.round(sec || 0);
@@ -789,8 +810,9 @@ function render({ prevOrder = [], placed } = {}) {
   $('m-smooth-bar').style.width = s.scored_transitions ? `${100 * s.smooth_transitions / s.scored_transitions}%` : '0';
   $('m-clash').textContent = s.rough_transitions;
   $('m-clash').style.color = s.rough_transitions ? 'var(--red)' : 'var(--green)';
+  $('m-clash').title = s.avg_compatibility_score ? `Average mix compatibility: ${s.avg_compatibility_score}/100` : '';
   $('m-improve').textContent = s.initial_penalty > 0 ? `${Math.round(s.improvement_percent)}%` : '–';
-  $('m-improve-s').textContent = s.initial_penalty > 0 ? `mixing friction ${s.initial_penalty} → ${s.final_penalty}` : 'not enough keyed songs to compare';
+  $('m-improve-s').textContent = s.avg_compatibility_score ? `avg compatibility ${s.avg_compatibility_score}/100` : (s.initial_penalty > 0 ? `mixing friction ${s.initial_penalty} → ${s.final_penalty}` : 'not enough keyed songs to compare');
   const bpms = songs.map(x => x.bpm).filter(b => b > 0);
   const range = bpms.length ? `${Math.round(Math.min(...bpms))}–${Math.round(Math.max(...bpms))}` : '';
   if (total) {
@@ -858,6 +880,7 @@ function renderTracks({ prevOrder = [], placed } = {}) {
         <span class="tag flag${flagged.has(song.id) ? '' : ' hidden'}" title="Suggested cut. See Trim the set">Suggested cut</span>
         ${src}
       </div>
+      <span class="nrg">${energyPill(song)}</span>
       <span class="bpm">${song.bpm > 0 ? Math.round(song.bpm) : '—'}</span>
       <span class="dur">${fmtTime(song.duration_seconds)}</span>
       <div class="actions">
@@ -870,7 +893,9 @@ function renderTracks({ prevOrder = [], placed } = {}) {
     const t = data.transitions[i];
     if (t && !q) {
       const kind = t.is_unknown ? 'unknown' : (t.is_smooth ? 'smooth' : 'rough');
-      parts.push(`<div class="conn ${kind}" title="Mix difficulty ${t.penalty}"><span class="d">${esc(t.description)}</span></div>`);
+      const pillHtml = t.is_unknown ? '' : scorePill(t.compatibility_score);
+      const edelta = t.energy_delta ? (t.energy_delta > 0 ? ` +${t.energy_delta} energy` : ` ${t.energy_delta} energy`) : '';
+      parts.push(`<div class="conn ${kind}" title="Mix compatibility: ${t.compatibility_score}/100 · Friction: ${t.penalty}">${pillHtml}<span class="d">${esc(t.description)}${esc(edelta)}</span></div>`);
     }
   });
   if (!shown) parts.push(`<div class="no-match">No songs match “${esc(q)}”.</div>`);
@@ -922,12 +947,13 @@ function renderJourney(songs, transitions) {
   if (!el.clientWidth) return;
   const W = el.clientWidth, H = 130, pad = 10;
   el.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const hasEnergy = songs.some(s => s.energy !== null && s.energy !== undefined);
   const useBpm = songs.filter(s => s.bpm > 0).length >= 2;
-  const val = (s) => useBpm ? (s.bpm > 0 ? s.bpm : null) : (s.resolved_key ? s.resolved_key.number + (s.resolved_key.letter === 'B' ? 0.5 : 0) : null);
+  const val = (s) => hasEnergy ? (s.energy !== null && s.energy !== undefined ? s.energy : 5.5) : (useBpm ? (s.bpm > 0 ? s.bpm : null) : (s.resolved_key ? s.resolved_key.number + (s.resolved_key.letter === 'B' ? 0.5 : 0) : null));
   const vals = songs.map(val).filter(v => v !== null);
-  if (songs.length < 2 || vals.length < 2) { el.innerHTML = ''; $('journey-cap').textContent = 'Not enough songs with a known tempo or key to chart.'; $('journey-hint').textContent = ''; return; }
+  if (songs.length < 2 || vals.length < 2) { el.innerHTML = ''; $('journey-cap').textContent = 'Not enough songs with a known tempo, energy or key to chart.'; $('journey-hint').textContent = ''; return; }
   let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (hi - lo < 4) { lo -= 2; hi += 2; }
+  if (hi - lo < (hasEnergy ? 2.0 : 4)) { lo -= (hasEnergy ? 1.0 : 2); hi += (hasEnergy ? 1.0 : 2); }
   const x = (i) => pad + (W - 2 * pad) * (songs.length === 1 ? 0.5 : i / (songs.length - 1));
   const y = (v) => H - pad - (H - 2 * pad) * (v - lo) / (hi - lo);
   let svg = '';
@@ -941,11 +967,13 @@ function renderJourney(songs, transitions) {
   songs.forEach((s, i) => {
     const v = val(s); if (v === null) return;
     const k = s.resolved_key, color = k ? KEY_COLORS[k.number - 1] : '#64748b';
-    svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${s.manual ? 5 : 4}" fill="${color}" stroke="${s.manual ? '#c084fc' : '#151a28'}" stroke-width="2"><title>#${i + 1} ${esc(s.title)} · ${k ? esc(k.camelot) : '?'}${s.bpm > 0 ? ' · ' + Math.round(s.bpm) + ' BPM' : ''}</title></circle>`;
+    const nrgStr = s.energy !== null && s.energy !== undefined ? ` · Energy ${s.energy.toFixed(1)}` : '';
+    svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${s.manual ? 5 : 4}" fill="${color}" stroke="${s.manual ? '#c084fc' : '#151a28'}" stroke-width="2"><title>#${i + 1} ${esc(s.title)} · ${k ? esc(k.camelot) : '?'}${s.bpm > 0 ? ' · ' + Math.round(s.bpm) + ' BPM' : ''}${nrgStr}</title></circle>`;
   });
   el.innerHTML = svg;
-  $('journey-hint').textContent = useBpm ? `${Math.round(Math.min(...vals))}–${Math.round(Math.max(...vals))} BPM` : 'by key';
-  $('journey-cap').innerHTML = `${useBpm ? 'Tempo' : 'Wheel position'} from first to last song. Dots are colored by key; <span style="color:var(--red)">dashed red</span> lines are key clashes.`;
+  const label = hasEnergy ? `Energy ${Math.min(...vals).toFixed(1)}–${Math.max(...vals).toFixed(1)}` : (useBpm ? `${Math.round(Math.min(...vals))}–${Math.round(Math.max(...vals))} BPM` : 'by key');
+  $('journey-hint').textContent = label;
+  $('journey-cap').innerHTML = `${hasEnergy ? 'Energy trajectory' : (useBpm ? 'Tempo' : 'Wheel position')} from first to last song. Dots are colored by key; <span style="color:var(--red)">dashed red</span> lines are key clashes.`;
 }
 
 /* ---------- Trim the set (removal budget) ---------- */

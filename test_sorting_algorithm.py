@@ -239,6 +239,23 @@ class TestRemovalPlanner(unittest.TestCase):
         pos = [s.id for s in plan.final_order].index("20")
         self.assertTrue(3 - len(removed) <= pos <= 3)
 
+    def test_energy_flow_affects_sorting_order(self):
+        # Two tracks with identical harmonic compatibility into opener (8A -> 9A)
+        # One has smooth rising energy (5.0 -> 6.0), the other drops steeply (5.0 -> 1.0)
+        s0 = keyed(0, "8A", 124)
+        s0.energy = 5.0
+        s1 = keyed(1, "9A", 124)
+        s1.energy = 6.0
+        s2 = keyed(2, "9A", 124)
+        s2.energy = 1.0
+
+        sorter = HarmonicPlaylistSorter(energy_flow_preference="gradual_build")
+        res = sorter.optimize_order([s0, s1, s2], start_id="0")
+        self.assertEqual(res[0].id, "0")
+        # In gradual build, s1 (rising energy 6.0) is preferred right after s0 (5.0) over s2 (energy drop to 1.0)
+        self.assertEqual(res[1].id, "1")
+        self.assertEqual(res[2].id, "2")
+
 
 if __name__ == "__main__":
     unittest.main()

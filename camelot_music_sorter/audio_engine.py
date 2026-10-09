@@ -145,10 +145,74 @@ def read_key_tag_from_file(file_path: str) -> Optional[str]:
     return None
 
 
-def detect_key_from_audio_file(file_path: str) -> Optional[Tuple[MusicalKey, float]]:
-    """Detect key directly from an audio file on disk."""
+def detect_audio_features(file_path: str, bpm: Optional[float] = None) -> Optional[Tuple[MusicalKey, float, float]]:
+    """Detect key, confidence, and energy level directly from an audio file."""
     result = extract_pcm_from_file(file_path)
     if result is None:
         return None
     samples, sample_rate = result
-    return estimate_key_from_chroma(compute_chroma_from_pcm(samples, sample_rate))
+    key, conf = estimate_key_from_chroma(compute_chroma_from_pcm(samples, sample_rate))
+    energy = compute_energy_from_pcm(samples, sample_rate, bpm=bpm)
+    return key, conf, energy
+
+
+def compute_energy_from_pcm(samples: np.ndarray, sample_rate: int = SAMPLE_RATE, bpm: Optional[float] = None) -> float:
+    """
+    Compute an energy level on a 1.0 - 10.0 scale from mono audio samples.
+    Combines RMS loudness, spectral centroid/brightness, and dynamic crest factor.
+    """
+    if len(samples) < 512:
+        return 5.0
+
+    # 1. RMS Loudness
+    rms = float(np.sqrt(np.mean(samples ** 2)))
+    rms_db = 20.0 * np.log10(max(rms, 1e-6))
+    # Standard mastering range: -26 dBFS (quiet/ambient) to -6 dBFS (maximally loud EDM)
+    rms_score = float(np.clip((rms_db - (-26.0)) / (-6.0 - (-26.0)), 0.0, 1.0))
+
+    # 2. Spectral Centroid / Brightness
+    n_fft = 2048
+    hop = 1024
+    if len(samples) >= n_fft:
+        n_frames = min(120, 1 + (len(samples) - n_fft) // hop)
+        idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+        frames = samples[idx] * np.hanning(n_fft)
+        mags = np.abs(np.fft.rfft(frames, axis=1))
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
+        mag_sum = mags.sum(axis=1)
+        valid = mag_sum > 1e-6
+        if np.any(valid):
+            centroids = (mags[valid] * freqs).sum(axis=1) / mag_sum[valid]
+            mean_centroid = float(np.mean(centroids))
+        else:
+            mean_centroid = 1500.0
+    else:
+        mean_centroid = 1500.0
+    centroid_score = float(np.clip((mean_centroid - 800.0) / (3800.0 - 800.0), 0.0, 1.0))
+
+    # 3. Dynamic compression (Crest factor)
+    peak = float(np.max(np.abs(samples)))
+    crest = peak / max(rms, 1e-6)
+    crest_score = float(np.clip((6.0 - crest) / (6.0 - 2.2), 0.0, 1.0))
+
+    # Base audio energy
+    raw_energy = 0.50 * rms_score + 0.30 * centroid_score + 0.20 * crest_score
+
+    # 4. BPM influence if available
+    if bpm and bpm > 0:
+        effective_bpm = bpm
+        while effective_bpm < 85:
+            effective_bpm *= 2
+        while effective_bpm > 175:
+            effective_bpm /= 2
+        bpm_score = float(np.clip((effective_bpm - 85.0) / (145.0 - 85.0), 0.1, 1.0))
+        raw_energy = 0.85 * raw_energy + 0.15 * bpm_score
+
+    energy = 1.0 + 9.0 * raw_energy
+    return round(float(np.clip(energy, 1.0, 10.0)), 1)
+
+
+def detect_key_from_audio_file(file_path: str) -> Optional[Tuple[MusicalKey, float]]:
+    """Detect key directly from an audio file on disk."""
+    res = detect_audio_features(file_path)
+    return (res[0], res[1]) if res else None

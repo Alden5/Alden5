@@ -294,10 +294,10 @@ def _t(pid: str, title: str, artist: str, bpm: float, comment: str = "", album: 
 def _build_demo_library() -> Dict[str, Dict[str, Any]]:
     return {
         "DEMO000000000001": {"name": "Friday Night House", "tracks": [
-            _t("D1A0000000000001", "Deep Inside", "Hardrive", 124, "8A"),
+            _t("D1A0000000000001", "Deep Inside", "Hardrive", 124, "8A - Energy 5"),
             _t("D1A0000000000002", "Cola", "CamelPhat & Elderbrook", 122, "9A - Energy 6"),
             _t("D1A0000000000003", "Show Me Love", "Robin S", 120, "Key: C major"),
-            _t("D1A0000000000004", "Losing It", "FISHER", 125, "10A"),
+            _t("D1A0000000000004", "Losing It", "FISHER", 125, "10A - Energy 8"),
             _t("D1A0000000000005", "Bangarang", "Skrillex", 110, "2B"),
             _t("D1A0000000000006", "Love Story", "Taylor Swift", 119, "2B"),
             _t("D1A0000000000007", "Piece of Your Heart", "Meduza", 124, "9B"),
@@ -306,16 +306,16 @@ def _build_demo_library() -> Dict[str, Dict[str, Any]]:
         ]},
         "DEMO000000000002": {"name": "Sunset Melodic Mix", "tracks": [
             _t("D2A0000000000001", "Opus", "Eric Prydz", 126, "8A"),
-            _t("D2A0000000000002", "Innerbloom", "RÜFÜS DU SOL", 124, "9A"),
+            _t("D2A0000000000002", "Innerbloom", "RÜFÜS DU SOL", 124, "9A - Energy 6"),
             _t("D2A0000000000003", "Sun & Moon", "Above & Beyond", 128, "10B"),
             _t("D2A0000000000004", "Strobe", "deadmau5", 128, "8A"),
-            _t("D2A0000000000005", "Adagio for Strings", "Tiësto", 140, "2A"),
+            _t("D2A0000000000005", "Adagio for Strings", "Tiësto", 140, "2A - Energy 9"),
             _t("D2A0000000000006", "Language", "Porter Robinson", 128, "8B"),
         ]},
         "DEMO000000000003": {"name": "Festival Warmup", "tracks": [
             _t("D3A0000000000001", "Titanium", "David Guetta", 126, "4B"),
             _t("D3A0000000000002", "Wake Me Up", "Avicii", 124, "10A"),
-            _t("D3A0000000000003", "Animals", "Martin Garrix", 128, "5A"),
+            _t("D3A0000000000003", "Animals", "Martin Garrix", 128, "5A - Energy 9"),
             _t("D3A0000000000004", "Clarity", "Zedd", 128, "4B"),
             _t("D3A0000000000005", "Levels", "Avicii", 126, "3B"),
             _t("D3A0000000000006", "Silence", "Marshmello", 142, "11A"),
