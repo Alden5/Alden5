@@ -430,7 +430,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
         <h2>Mix your playlists in key</h2>
         <p>Pick a playlist from your library. Every song's key is worked out, then the playlist is put in the smoothest harmonic order using the Camelot wheel. Your original playlist is never changed.</p>
         <div class="steps">
-          <div class="step"><div class="n">1</div><b>Calculate keys</b><span>From Comments/Grouping (Mixed In Key, Rekordbox), file tags, or the audio itself.</span></div>
+          <div class="step"><div class="n">1</div><b>Calculate keys</b><span>From Comments/Grouping (Mixed In Key), a rekordbox XML export, file tags, or the audio itself.</span></div>
           <div class="step"><div class="n">2</div><b>Shape the set</b><span>Drag a song anywhere to lock it in place. Everything below re-sorts around your choice.</span></div>
           <div class="step"><div class="n">3</div><b>Save to Music</b><span>Creates a new “… sorted” playlist from top to bottom.</span></div>
         </div>
