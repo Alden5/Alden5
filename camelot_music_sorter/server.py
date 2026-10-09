@@ -9,6 +9,7 @@ the server never grants one).
 
 from __future__ import annotations
 import json
+import os
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,21 +17,44 @@ from typing import Any, Dict, List, Optional
 
 from .apple_music import AppleMusicBridge, MusicAppError
 from .audio_engine import ffmpeg_available
+from .rekordbox import RekordboxError, RekordboxLibrary, default_library_path, music_updates
 from .song_model import KeyResolver, Song
 from .sorter import HarmonicPlaylistSorter, SortResult
 from .web_ui import WEB_UI_HTML
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+MAX_BODY_BYTES = 200 * 1024 * 1024  # a rekordbox XML export of a large collection can be tens of MB
 
 
 class AppState:
-    def __init__(self, bridge: Optional[AppleMusicBridge] = None, resolver: Optional[KeyResolver] = None):
+    def __init__(self, bridge: Optional[AppleMusicBridge] = None, resolver: Optional[KeyResolver] = None,
+                 rekordbox_path: Optional[str] = "default"):
         self.bridge = bridge or AppleMusicBridge()
         self.resolver = resolver or KeyResolver()
         self.music_lock = threading.Lock()
         self.progress_lock = threading.Lock()
         self.progress: Dict[str, Any] = {"active": False, "done": 0, "total": 0, "current": ""}
         self.tracks: Dict[str, List[Song]] = {}
+        self.rekordbox_path = default_library_path() if rekordbox_path == "default" else rekordbox_path
+        if self.rekordbox_path and self.resolver.rekordbox is None:
+            self.resolver.rekordbox = RekordboxLibrary.load(self.rekordbox_path)
+
+    def rekordbox_status(self) -> Dict[str, Any]:
+        lib = self.resolver.rekordbox
+        return lib.summary() if lib else {"loaded": False}
+
+    def set_rekordbox(self, lib: Optional[RekordboxLibrary]) -> None:
+        self.resolver.rekordbox = lib
+        self.tracks.clear()  # songs are re-resolved with the new analysis on next open
+        if not self.rekordbox_path:
+            return
+        try:
+            if lib:
+                lib.save(self.rekordbox_path)
+            elif os.path.exists(self.rekordbox_path):
+                os.remove(self.rekordbox_path)
+        except OSError:
+            pass
 
     def set_progress(self, **kw: Any) -> None:
         with self.progress_lock:
@@ -111,7 +135,8 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             elif path == "/api/status":
-                self._send_json({"mode": self.state.bridge.mode, "ffmpeg": ffmpeg_available()})
+                self._send_json({"mode": self.state.bridge.mode, "ffmpeg": ffmpeg_available(),
+                                 "rekordbox": self.state.rekordbox_status()})
             elif path == "/api/playlists":
                 with self.state.music_lock:
                     playlists = self.state.bridge.get_all_playlists()
@@ -133,6 +158,8 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
             return self._send_json({"error": "Content-Type must be application/json"}, 415)
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length > MAX_BODY_BYTES:
+                return self._send_json({"error": "Request is too large."}, 413)
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             return self._send_json({"error": "Invalid JSON body"}, 400)
@@ -144,6 +171,13 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
                 self._removal_plan(payload)
             elif self.path == "/api/export":
                 self._export(payload)
+            elif self.path == "/api/rekordbox/import":
+                self._rekordbox_import(payload)
+            elif self.path == "/api/rekordbox/clear":
+                self.state.set_rekordbox(None)
+                self._send_json(self.state.rekordbox_status())
+            elif self.path == "/api/rekordbox/write":
+                self._rekordbox_write(payload)
             else:
                 self._send_json({"error": "Not found"}, 404)
         except MusicAppError as e:
@@ -234,6 +268,32 @@ class CamelotServerHandler(BaseHTTPRequestHandler):
         with self.state.music_lock:
             created = self.state.bridge.create_sorted_playlist(playlist["id"], playlist["name"], ordered)
         self._send_json({"status": "success", **created})
+
+    def _rekordbox_import(self, payload: Dict[str, Any]) -> None:
+        xml = payload.get("xml")
+        if not isinstance(xml, str) or not xml.strip():
+            return self._send_json({"error": "Choose the XML file exported from rekordbox."}, 400)
+        try:
+            lib = RekordboxLibrary.from_xml(xml.encode("utf-8"), os.path.basename(str(payload.get("filename") or "")))
+        except RekordboxError as e:
+            return self._send_json({"error": str(e)}, 400)
+        self.state.set_rekordbox(lib)
+        self._send_json(self.state.rekordbox_status())
+
+    def _rekordbox_write(self, payload: Dict[str, Any]) -> None:
+        playlist = self._playlist(payload.get("playlist_id") or "")
+        songs = self.state.tracks.get(playlist["id"])
+        if songs is None:
+            return self._send_json({"error": "Analyze the playlist first."}, 400)
+        updates = music_updates(songs)
+        if not updates:
+            return self._send_json({"written": 0, "keys": 0, "bpms": 0})
+        self.state.set_progress(active=True, done=0, total=len(updates), current="Saving keys to Music…")
+        with self.state.music_lock:
+            written = self.state.bridge.write_track_metadata(updates)
+        self.state.tracks.pop(playlist["id"], None)
+        self._send_json({"written": written, "keys": sum(1 for _, c, _ in updates if c),
+                         "bpms": sum(1 for _, _, b in updates if b)})
 
     def _send_json(self, data: Dict[str, Any], status: int = 200) -> None:
         body = json.dumps(data).encode("utf-8")

@@ -10,7 +10,7 @@ from camelot_music_sorter.song_model import KeyResolver
 
 class TestServerAndApi(unittest.TestCase):
     def setUp(self):
-        state = AppState(bridge=AppleMusicBridge(demo=True), resolver=KeyResolver(cache_path=None))
+        state = AppState(bridge=AppleMusicBridge(demo=True), resolver=KeyResolver(cache_path=None), rekordbox_path=None)
         self.server = make_server(0, state)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

@@ -52,6 +52,22 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
               display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--dim); padding: 0 6px; }
   .icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
   .pl-list { overflow-y: auto; flex: 1; padding: 0 8px 16px; }
+  .rb { flex: none; margin: 0 12px 14px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+  .rb-head { display: flex; align-items: center; gap: 10px; }
+  .rb-logo { width: 28px; height: 28px; border-radius: 7px; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 800;
+             background: #1d2436; color: #e2e8f0; border: 1px solid var(--border); letter-spacing: -.3px; }
+  .rb.on .rb-logo { background: rgba(34,211,238,.15); color: var(--accent); border-color: rgba(34,211,238,.35); }
+  .rb-text { min-width: 0; }
+  .rb-text b { font-size: 13px; }
+  .rb-meta { font-size: 11.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rb-actions { display: flex; align-items: center; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+  .rb-help { font-size: 12px; color: var(--dim); }
+  .rb-help summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; padding: 0 4px; }
+  .rb-help summary::-webkit-details-marker { display: none; }
+  .rb-help div { margin-top: 8px; line-height: 1.5; width: 100%; }
+  .rb-help[open] { flex-basis: 100%; order: 3; }
+  .tag.rb-src { color: var(--accent); background: rgba(34,211,238,.08); border: 1px solid rgba(34,211,238,.28); font-weight: 600; }
+  .notice .btn { margin-left: 8px; vertical-align: middle; }
   .pl { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
         background: none; border: none; text-align: left; color: var(--text); }
   .pl:hover { background: var(--hover); }
@@ -387,6 +403,20 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
       <button id="refresh" class="icon-btn" title="Reload playlists and re-read tracks from Music"><svg class="i"><use href="#i-refresh"/></svg></button>
     </div>
     <div id="pl-list" class="pl-list"><div class="side-empty">Loading playlists…</div></div>
+    <div class="rb" id="rb">
+      <div class="rb-head">
+        <span class="rb-logo">rb</span>
+        <div class="rb-text"><b>rekordbox</b><div class="rb-meta" id="rb-meta">Use the keys rekordbox analyzed</div></div>
+      </div>
+      <div class="rb-actions">
+        <button id="rb-import" class="btn sm">Import XML</button>
+        <button id="rb-clear" class="btn sm hidden" title="Stop using the imported rekordbox analysis">Remove</button>
+        <details class="rb-help"><summary title="How to export from rekordbox">How?</summary>
+          <div>In rekordbox, analyze your songs (Apple Music tracks too), then choose <b>File → Export Collection in xml format</b> and import that file here. Songs are matched by title, artist and length.</div>
+        </details>
+      </div>
+      <input type="file" id="rb-file" accept=".xml,text/xml,application/xml" hidden>
+    </div>
   </aside>
 
   <main>
@@ -440,6 +470,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
         </div>
 
         <div id="unknown-notice" class="notice info"></div>
+        <div id="rb-notice" class="notice info"></div>
 
         <div class="grid">
           <div class="card">
@@ -508,6 +539,7 @@ const state = {
   playlists: [], playlistId: null, result: null, strategy: 'gradual_build',
   excluded: new Set(), manual: new Set(), busy: false, undo: [], redo: [], drag: null,
   budget: 3, plan: null, planSeq: 0, tab: 'trim', showConn: true, focusId: null, dismissed: new Set(),
+  rbDismissed: new Set(), rekordbox: { loaded: false },
 };
 try {
   state.tab = localStorage.getItem('camelot.tab') || 'trim';
@@ -531,7 +563,7 @@ function scorePill(score) {
 function energyPill(song) {
   if (song.energy === undefined || song.energy === null) return '—';
   const e = song.energy;
-  const src = song.energy_source === 'audio_analysis' ? 'from audio analysis' : (song.energy_source === 'metadata' ? 'from tag/comment' : 'estimated from tempo/genre');
+  const src = { audio_analysis: 'from audio analysis', metadata: 'from tag/comment', rekordbox: 'from rekordbox comments' }[song.energy_source] || 'estimated from tempo/genre';
   return `<span class="energy-pill" title="Energy: ${e.toFixed(1)}/10 (${src})">${e.toFixed(1)}</span>`;
 }
 function fmtTime(sec) {
@@ -607,6 +639,7 @@ async function loadStatus() {
     const demo = s.mode === 'demo';
     $('mode').className = 'mode ' + (demo ? 'demo' : 'ok');
     $('mode-text').textContent = demo ? 'Demo library · not connected to Music' : 'Connected to Music';
+    renderRekordbox(s.rekordbox);
     show('ffmpeg-notice', s.ffmpeg ? '' : '<strong>ffmpeg not found.</strong> Keys can still be read from Comments/Grouping and file tags, but audio analysis is off. Install it with <code>brew install ffmpeg</code> and restart the app.');
   } catch (e) { show('error', esc(e.message)); }
 }
@@ -827,7 +860,14 @@ function render({ prevOrder = [], placed } = {}) {
   const unknown = songs.filter(x => !x.resolved_key);
   const showUnknown = unknown.length && !state.dismissed.has(state.playlistId);
   show('unknown-notice', showUnknown ? `<button class="close" data-dismiss title="Hide">${icon('x')}</button><strong>${unknown.length} song${unknown.length > 1 ? 's have' : ' has'} no known key</strong> and ${unknown.length > 1 ? 'go' : 'goes'} to the bottom unless you place ${unknown.length > 1 ? 'them' : 'it'}. ` +
-    `<details class="fix"><summary>How to fix</summary>Streaming and DRM-protected songs can't be analyzed. Add the key (e.g. <code>8A</code> or <code>Am</code>) to the song's Comments in Music, or analyze it with Mixed In Key / Rekordbox, then press ${icon('refresh')} in the sidebar.</details>` : '');
+    `<details class="fix"><summary>How to fix</summary>Streaming and DRM-protected songs can't be analyzed here. Analyze them in rekordbox and use <b>Import XML</b> at the bottom of the sidebar, or add the key (e.g. <code>8A</code> or <code>Am</code>) to the song's Comments in Music and press ${icon('refresh')}.</details>` : '');
+
+  const all = songs.concat(data.excluded_songs);
+  const rbKeys = all.filter(x => x.key_source === 'rekordbox').length, rbBpms = all.filter(x => x.bpm_source === 'rekordbox').length;
+  const rbParts = [rbKeys && `${rbKeys} key${rbKeys > 1 ? 's' : ''}`, rbBpms && `${rbBpms} BPM${rbBpms > 1 ? 's' : ''}`].filter(Boolean);
+  show('rb-notice', rbParts.length && !state.rbDismissed.has(state.playlistId) ?
+    `<button class="close" data-dismiss-rb title="Hide">${icon('x')}</button><strong>${rbParts.join(' and ')} came from rekordbox.</strong> ` +
+    `Save them to Music so they show up there too. The key goes in front of each song's Comments. <button class="btn sm" id="rb-write">Save to Music</button>` : '');
 
   renderTracks({ prevOrder, placed });
   renderWheel(songs);
@@ -849,7 +889,7 @@ function renderTracks({ prevOrder = [], placed } = {}) {
   const q = $('filter').value.trim().toLowerCase();
   const flagged = new Set(planFresh() ? state.plan.steps.map(x => x.song.id) : []);
   const prevIndex = new Map(prevOrder.map((id, i) => [id, i]));
-  const SRC = { metadata: 'from Comments/Grouping', file_tag: 'from the file tag', audio_analysis: 'from audio analysis', unknown: 'unknown' };
+  const SRC = { metadata: 'from Comments/Grouping', rekordbox: 'from rekordbox', file_tag: 'from the file tag', audio_analysis: 'from audio analysis', unknown: 'unknown' };
   const noDur = !songs.some(x => x.duration_seconds > 0);
   $('tracks').classList.toggle('no-dur', noDur); $('list-head').classList.toggle('no-dur', noDur);
   $('tracks').classList.toggle('compact', !state.showConn);
@@ -868,7 +908,8 @@ function renderTracks({ prevOrder = [], placed } = {}) {
     const k = song.resolved_key;
     const keyTitle = k ? `${k.camelot} · ${k.standard_name} · ${SRC[song.key_source] || song.key_source}` : (song.key_note || 'Key unknown');
     let src = '';
-    if (song.key_source === 'audio_analysis') src = `<span class="tag src" title="${esc(song.key_note || 'Calculated from the audio')}">Audio ${Math.round(song.confidence * 100)}%</span>`;
+    if (song.key_source === 'rekordbox') src = `<span class="tag rb-src" title="${esc(song.key_note)}${song.bpm_source === 'rekordbox' ? ' · BPM from rekordbox' : ''}">rekordbox</span>`;
+    else if (song.key_source === 'audio_analysis') src = `<span class="tag src" title="${esc(song.key_note || 'Calculated from the audio')}">Audio ${Math.round(song.confidence * 100)}%</span>`;
     else if (!k) src = `<span class="tag src" title="${esc(song.key_note || 'Key unknown')}">No key</span>`;
     parts.push(`<div class="${cls.join(' ')}" draggable="true" tabindex="0" data-id="${esc(song.id)}" data-index="${i}" aria-label="${i + 1}. ${esc(song.title)} by ${esc(song.artist)}${k ? ', ' + esc(k.camelot) : ''}">
       <span class="handle" title="Drag to place this song">${icon('grip')}</span>
@@ -1259,6 +1300,64 @@ async function exportPlaylist() {
   } finally { setBusy(false); updateControls(); }
 }
 
+/* ---------- rekordbox ---------- */
+
+function renderRekordbox(rb) {
+  state.rekordbox = rb || { loaded: false };
+  const on = state.rekordbox.loaded;
+  $('rb').classList.toggle('on', on);
+  $('rb-meta').textContent = on
+    ? `${rb.keyed_count.toLocaleString()} of ${rb.track_count.toLocaleString()} tracks analyzed${rb.source_name ? ' · ' + rb.source_name : ''}`
+    : 'Use the keys rekordbox analyzed';
+  $('rb-meta').title = on ? `Imported ${new Date(rb.imported_at * 1000).toLocaleString()}` : '';
+  $('rb-import').textContent = on ? 'Replace' : 'Import XML';
+  $('rb-clear').classList.toggle('hidden', !on);
+}
+
+function rekordboxCounts() {
+  const songs = state.result ? state.result.sorted_songs.concat(state.result.excluded_songs) : [];
+  return { matched: songs.filter(s => s.rekordbox_matched).length, keys: songs.filter(s => s.key_source === 'rekordbox').length, total: songs.length };
+}
+
+async function importRekordbox(file) {
+  if (state.busy || !file) return;
+  show('error', '');
+  setBusy(true);
+  let rb;
+  try {
+    rb = await api('/api/rekordbox/import', { xml: await file.text(), filename: file.name });
+    renderRekordbox(rb);
+  } catch (e) {
+    show('error', esc(e.message));
+    return;
+  } finally { setBusy(false); $('rb-file').value = ''; }
+  if (!state.playlistId) { toast(`Imported ${rb.track_count.toLocaleString()} tracks from rekordbox. Open a playlist to use them.`); return; }
+  await openPlaylist(state.playlistId);
+  const c = rekordboxCounts();
+  toast(`Imported rekordbox · matched ${c.matched} of ${c.total} songs here, ${c.keys} key${c.keys === 1 ? '' : 's'} from rekordbox`, { ms: 7000 });
+}
+
+async function clearRekordbox() {
+  if (state.busy) return;
+  try { renderRekordbox(await api('/api/rekordbox/clear', {})); } catch (e) { show('error', esc(e.message)); return; }
+  if (state.playlistId) await openPlaylist(state.playlistId);
+  toast('Stopped using the rekordbox import');
+}
+
+async function saveRekordboxToMusic() {
+  if (state.busy || !state.result) return;
+  if (!confirm(`Save the rekordbox keys for this playlist into Music?\n\nEach key is added in front of the song's existing Comments (for example "8A | your comment"), and BPM is filled in where Music has none. Other fields aren't changed.`)) return;
+  setBusy(true);
+  let r;
+  try { r = await api('/api/rekordbox/write', { playlist_id: state.result.playlist.id }); }
+  catch (e) { toast(esc(e.message), { error: true }); return; }
+  finally { setBusy(false); }
+  await openPlaylist(state.playlistId);
+  const skipped = r.keys + r.bpms > 0 && r.written === 0;
+  toast(skipped ? 'Music didn\'t accept the changes. Those songs may not be in your library.'
+    : `Saved rekordbox data to ${r.written} song${r.written === 1 ? '' : 's'} in Music`, { error: skipped });
+}
+
 /* ---------- Wiring ---------- */
 
 document.addEventListener('click', (e) => {
@@ -1268,7 +1367,9 @@ document.addEventListener('click', (e) => {
   const tab = e.target.closest('[data-tab]');
   if (tab) return setTab(tab.dataset.tab);
   if (e.target.closest('[data-dismiss]')) { state.dismissed.add(state.playlistId); show('unknown-notice', ''); return; }
+  if (e.target.closest('[data-dismiss-rb]')) { state.rbDismissed.add(state.playlistId); show('rb-notice', ''); return; }
   if (state.busy) return;
+  if (e.target.closest('#rb-write')) return saveRekordboxToMusic();
   const act = e.target.closest('[data-act]');
   if (act) {
     const id = act.closest('.row').dataset.id;
@@ -1344,6 +1445,9 @@ $('budget-dec').addEventListener('click', () => setBudget(state.budget - 1));
 $('budget-inc').addEventListener('click', () => setBudget(state.budget + 1));
 $('restore-all').addEventListener('click', () => { if (state.result) restoreSongs(state.result.excluded_songs.map(x => x.id)); });
 $('export').addEventListener('click', exportPlaylist);
+$('rb-import').addEventListener('click', () => { if (!state.busy) $('rb-file').click(); });
+$('rb-file').addEventListener('change', () => importRekordbox($('rb-file').files[0]));
+$('rb-clear').addEventListener('click', clearRekordbox);
 $('filter').addEventListener('input', () => { if (state.result) renderTracks({}); });
 $('pl-search').addEventListener('input', renderPlaylists);
 $('refresh').addEventListener('click', async () => { await loadPlaylists(); if (state.playlistId) openPlaylist(state.playlistId, { refresh: true }); });

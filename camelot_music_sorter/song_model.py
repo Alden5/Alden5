@@ -109,7 +109,9 @@ class Song:
     key_note: str = ""
     confidence: float = 0.0
     energy: Optional[float] = None
-    energy_source: str = "unknown"  # "metadata", "audio_analysis", "estimated", "unknown"
+    energy_source: str = "unknown"  # "metadata", "rekordbox", "audio_analysis", "estimated", "unknown"
+    bpm_source: str = "music"       # "music" or "rekordbox"
+    rekordbox_matched: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -127,6 +129,8 @@ class Song:
             "bpm": self.bpm,
             "energy": round(self.energy, 1) if self.energy is not None else None,
             "energy_source": self.energy_source,
+            "bpm_source": self.bpm_source,
+            "rekordbox_matched": self.rekordbox_matched,
             "has_local_file": bool(self.location),
             "key_source": self.key_source,
             "key_note": self.key_note,
@@ -158,6 +162,7 @@ class KeyResolver:
         self.cache_path = default_cache_path() if cache_path == "default" else cache_path
         self._lock = threading.Lock()
         self._cache: Dict[str, Dict[str, Any]] = self._load_cache()
+        self.rekordbox = None  # RekordboxLibrary, set when the user imports an XML export
 
     def _load_cache(self) -> Dict[str, Dict[str, Any]]:
         if not self.cache_path or not os.path.exists(self.cache_path):
@@ -215,8 +220,27 @@ class KeyResolver:
                     entry["energy"] = audio_energy
                     entry["energy_source"] = "audio_analysis"
 
+    def _fill_energy(self, song: Song) -> None:
+        if song.energy is None and self.enable_audio_analysis and song.location and os.path.exists(song.location):
+            self._resolve_audio_energy(song)
+        if song.energy is None:
+            song.energy = estimate_energy_from_metadata(song.bpm, song.genre, song.rating)
+            song.energy_source = "estimated"
+
+    def _apply_rekordbox(self, song: Song):
+        rb = self.rekordbox.match(song.title, song.artist, song.duration_seconds, song.location) if self.rekordbox else None
+        if rb is None:
+            return None
+        song.rekordbox_matched = True
+        if song.bpm <= 0 and rb.bpm > 0:
+            song.bpm, song.bpm_source = rb.bpm, "rekordbox"
+        if song.energy is None:
+            e = extract_energy_from_text(rb.comments)
+            if e is not None:
+                song.energy, song.energy_source = e, "rekordbox"
+        return rb
+
     def resolve(self, song: Song) -> Song:
-        # 1. Check metadata for energy level
         if song.energy is None:
             for text in (song.key_tag, song.extra.get("comment"), song.extra.get("grouping")):
                 e = extract_energy_from_text(text)
@@ -225,7 +249,8 @@ class KeyResolver:
                     song.energy_source = "metadata"
                     break
 
-        # 2. Check metadata for key
+        rb = self._apply_rekordbox(song)
+
         for label, text in (("key tag", song.key_tag),
                             ("comments", song.extra.get("comment")),
                             ("grouping", song.extra.get("grouping"))):
@@ -233,29 +258,30 @@ class KeyResolver:
             if parsed:
                 song.resolved_key, song.key_source, song.confidence = parsed, "metadata", 0.95
                 song.key_note = f"Read from {label}"
-                if song.energy is None:
-                    if song.location and os.path.exists(song.location) and self.enable_audio_analysis:
-                        self._resolve_audio_energy(song)
-                    if song.energy is None:
-                        song.energy = estimate_energy_from_metadata(song.bpm, song.genre, song.rating)
-                        song.energy_source = "estimated"
+                self._fill_energy(song)
                 return song
+
+        rb_key = (rb.key or extract_key(rb.comments)) if rb else None
+        if rb_key:
+            song.resolved_key, song.key_source, song.confidence = rb_key, "rekordbox", 0.9
+            song.key_note = f"From rekordbox analysis ({rb.tonality or rb.comments})"
+            self._fill_energy(song)
+            return song
 
         if not song.location:
             song.resolved_key, song.key_source, song.confidence = None, "unknown", 0.0
-            song.key_note = ("Streaming / cloud track with no key in comments or grouping. "
-                             "Download it or add its key (e.g. '8A') to the Comments field.")
-            if song.energy is None:
-                song.energy = estimate_energy_from_metadata(song.bpm, song.genre, song.rating)
-                song.energy_source = "estimated"
+            if rb:
+                song.key_note = "Found in your rekordbox export, but rekordbox hasn't analyzed its key yet."
+            else:
+                song.key_note = ("Streaming / cloud track with no key in comments or grouping. Analyze it in "
+                                 "rekordbox and import the XML export, or add its key (e.g. '8A') to Comments.")
+            self._fill_energy(song)
             return song
 
         if not os.path.exists(song.location):
             song.resolved_key, song.key_source, song.confidence = None, "unknown", 0.0
             song.key_note = "Audio file is missing on disk."
-            if song.energy is None:
-                song.energy = estimate_energy_from_metadata(song.bpm, song.genre, song.rating)
-                song.energy_source = "estimated"
+            self._fill_energy(song)
             return song
 
         cache_key = self._file_cache_key(song.location)

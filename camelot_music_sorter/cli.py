@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 import argparse
+import os
 import sys
 
 from .apple_music import AppleMusicBridge, MusicAppError
 from .audio_engine import ffmpeg_available
+from .rekordbox import RekordboxError, RekordboxLibrary, default_library_path, music_updates
 from .song_model import KeyResolver
 from .sorter import HarmonicPlaylistSorter
 from .server import run_web_server
@@ -34,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strategy", choices=["gradual_build", "balanced"], default="gradual_build",
                    help="gradual_build: rising tempo and steps up the wheel; balanced: smoothest in any direction")
     p.add_argument("--no-audio-analysis", action="store_true", help="Only use keys from tags/comments")
+    p.add_argument("--rekordbox", metavar="XML",
+                   help="Use keys and BPM from a rekordbox XML export (File > Export Collection in xml format). "
+                        "Without this, the export last imported in the web app is used.")
+    p.add_argument("--save-rekordbox-keys", action="store_true",
+                   help="Write keys (and missing BPMs) found in rekordbox into the songs' Comments/BPM in Music")
     p.add_argument("--demo", action="store_true", help="Use the built-in sample library instead of Music.app")
     return p
 
@@ -81,6 +88,18 @@ def _run(args, bridge: AppleMusicBridge) -> int:
         print("Note: ffmpeg not found, so audio analysis is off (brew install ffmpeg).")
 
     resolver = KeyResolver(enable_audio_analysis=not args.no_audio_analysis)
+    if args.rekordbox:
+        try:
+            with open(args.rekordbox, "rb") as fh:
+                resolver.rekordbox = RekordboxLibrary.from_xml(fh.read(), os.path.basename(args.rekordbox))
+        except (OSError, RekordboxError) as e:
+            print(f"Could not read the rekordbox export: {e}", file=sys.stderr)
+            return 1
+    else:
+        resolver.rekordbox = RekordboxLibrary.load(default_library_path())
+    if resolver.rekordbox:
+        lib = resolver.rekordbox
+        print(f"Using rekordbox export {lib.source_name or ''} ({lib.keyed_count} of {len(lib.tracks)} tracks analyzed).")
     interactive = sys.stdout.isatty()
 
     def progress(done, total, song):
@@ -90,6 +109,17 @@ def _run(args, bridge: AppleMusicBridge) -> int:
     resolver.resolve_many(songs, progress)
     if interactive:
         print()
+    if resolver.rekordbox:
+        matched = sum(1 for s in songs if s.rekordbox_matched)
+        from_rb = sum(1 for s in songs if s.key_source == "rekordbox")
+        print(f"Matched {matched} of {len(songs)} songs to rekordbox; {from_rb} key(s) came from rekordbox.")
+    if args.save_rekordbox_keys:
+        updates = music_updates(songs)
+        if args.dry_run:
+            print(f"Dry run: would save {len(updates)} song(s)' rekordbox keys/BPM to Music.")
+        elif updates:
+            written = bridge.write_track_metadata(updates)
+            print(f"Saved rekordbox keys/BPM to {written} song(s) in Music.")
 
     start_id = None
     if args.start:

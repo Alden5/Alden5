@@ -108,18 +108,52 @@ Music doesn't store musical keys, so each song's key is found in this order:
 
 1. **Comments or Grouping in Music.** Text such as `8A`, `8A - Energy 6`, `Am`,
    `F# minor` or Open Key `1m` is recognized. Mixed In Key writes keys here, and
-   you can type them in yourself with **Get Info → Comments**.
-2. **A key tag inside the audio file** (ID3 `TKEY` or iTunes `initialkey`), as
+   you can type them in yourself with **Get Info → Comments**. A key here always wins.
+2. **An imported rekordbox analysis**, which also works for Apple Music streaming
+   songs. See [Using keys from rekordbox](#using-keys-from-rekordbox).
+3. **A key tag inside the audio file** (ID3 `TKEY` or iTunes `initialkey`), as
    written by Rekordbox, Mixed In Key, Traktor and similar tools.
-3. **Audio analysis** of downloaded, non-DRM files (MP3, AAC/M4A, AIFF, WAV,
+4. **Audio analysis** of downloaded, non-DRM files (MP3, AAC/M4A, AIFF, WAV,
    FLAC). This uses ffmpeg plus chroma / Krumhansl–Kessler key profiles. The
    result shows a confidence percentage. Results are cached, so later runs are
    instant.
 
-Apple Music streaming songs and DRM-protected downloads can't be analyzed. If
-one of these has no key in Comments or Grouping, it is marked **?** and placed
-at the end instead of being given a guessed key. To include it, add its key to
-Comments in Music and press **↻**.
+Apple Music streaming songs and DRM-protected downloads can't be analyzed by
+this app. If one of these has no key in Comments or Grouping, it is marked **?**
+and placed at the end instead of being given a guessed key. To include it,
+import a rekordbox analysis (below) or add its key to Comments in Music and
+press **↻**.
+
+### Using keys from rekordbox
+
+rekordbox can analyze Apple Music songs through its Apple Music integration,
+but it keeps the results in its own library. To use them here:
+
+1. In rekordbox, analyze the songs, then choose **File → Export Collection in
+   xml format**.
+2. In the app, press **Import XML** at the bottom of the sidebar and pick that
+   file. The import is remembered, so you only need to repeat it after analyzing
+   new songs in rekordbox (press **Replace**).
+
+Songs are matched by file location when there is one, otherwise by title and
+artist (ignoring things like "feat. …" or "(Remastered)"), using the song length
+to tell versions apart. rekordbox's key is used when a song has no key in
+Comments or Grouping, and its BPM fills in songs that have no BPM in Music.
+Songs whose key came from rekordbox are tagged **rekordbox** in the list.
+
+To keep those keys in Music itself, press **Save to Music** in the notice above
+the list. The Camelot key is added in front of each song's existing Comments
+(for example `8A | your comment`), and BPM is filled in where Music has none.
+Nothing else is changed.
+
+From the command line:
+
+```bash
+camelot-sorter -p "Friday Night House" --rekordbox ~/Desktop/rekordbox.xml --dry-run
+camelot-sorter -p "Friday Night House" --rekordbox ~/Desktop/rekordbox.xml --save-rekordbox-keys
+```
+
+Without `--rekordbox`, the CLI uses the export last imported in the web app.
 
 ## Energy level detection
 

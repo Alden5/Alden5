@@ -11,7 +11,7 @@ On other platforms, or with demo=True, an in-memory demo library is used.
 from __future__ import annotations
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .song_model import Song
 
@@ -139,6 +139,28 @@ end run
 """
 
 
+WRITE_METADATA_SCRIPT = """
+on run argv
+    set written to 0
+    tell application "Music"
+        with timeout of 900 seconds
+            repeat with i from 1 to (count of argv) by 3
+                try
+                    set t to (first track of library playlist 1 whose persistent ID is (item i of argv))
+                    set c to item (i + 1) of argv
+                    set b to item (i + 2) of argv
+                    if c is not "" then set comment of t to c
+                    if b is not "" then set bpm of t to (b as integer)
+                    set written to written + 1
+                end try
+            end repeat
+        end timeout
+    end tell
+    return written as text
+end run
+"""
+
+
 def _to_float(value: str) -> float:
     try:
         return float(value.strip().replace(",", "."))
@@ -262,6 +284,26 @@ class AppleMusicBridge:
             "requested": len(track_ids),
             "replaced": len(parts) > 2 and parts[2].strip().lower() == "true",
         }
+
+    def write_track_metadata(self, updates: List[Tuple[str, str, Optional[int]]]) -> int:
+        """Set Comments and/or BPM on library tracks: (persistent_id, comment or "", bpm or None). Returns tracks written."""
+        updates = [(pid, c or "", b) for pid, c, b in updates if pid and (c or b)]
+        if not updates:
+            return 0
+        if self.demo:
+            written = set()
+            for pl in self._demo_library.values():
+                for t in pl["tracks"]:
+                    for pid, comment, bpm in updates:
+                        if t.get("persistent_id") == pid:
+                            if comment:
+                                t["extra"] = {**t.get("extra", {}), "comment": comment}
+                            if bpm:
+                                t["bpm"] = bpm
+                            written.add(pid)
+            return len(written)
+        args = [x for pid, c, b in updates for x in (pid, c, str(b) if b else "")]
+        return int(_to_float(self.run_applescript(WRITE_METADATA_SCRIPT, *args)))
 
     def _demo_create(self, base_name: str, songs: List[Song]) -> Dict[str, Any]:
         name, n, replaced = base_name, 1, False
